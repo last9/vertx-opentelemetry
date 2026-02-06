@@ -48,6 +48,19 @@ Any Vert.x client created from a traced `Vertx` instance is **automatically inst
 
 ### 1. Add Dependency
 
+Download the JAR from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases) and install it to your local Maven repository:
+
+```bash
+mvn install:install-file \
+  -Dfile=vertx-rxjava3-otel-autoconfigure-0.9.0.jar \
+  -DgroupId=io.vertx.tracing \
+  -DartifactId=vertx-rxjava3-otel-autoconfigure \
+  -Dversion=0.9.0 \
+  -Dpackaging=jar
+```
+
+Then add it to your `pom.xml`:
+
 ```xml
 <dependency>
     <groupId>io.vertx.tracing</groupId>
@@ -55,6 +68,18 @@ Any Vert.x client created from a traced `Vertx` instance is **automatically inst
     <version>0.9.0</version>
 </dependency>
 ```
+
+<details>
+<summary>Alternative: Gradle</summary>
+
+Place the JAR in a `libs/` directory and add to `build.gradle`:
+
+```groovy
+dependencies {
+    implementation files('libs/vertx-rxjava3-otel-autoconfigure-0.9.0.jar')
+}
+```
+</details>
 
 ### 2. Set Main Class
 
@@ -256,5 +281,5 @@ Contributions are welcome! Please open an issue or submit a pull request.
 
 ## Support
 
-- [GitHub Issues](https://github.com/last9/vertx-rxjava3-otel-autoconfigure/issues)
+- [GitHub Issues](https://github.com/last9/vertx-opentelemetry/issues)
 - [Last9 Documentation](https://docs.last9.io)
