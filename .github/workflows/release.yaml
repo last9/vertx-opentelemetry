@@ -100,5 +100,5 @@ jobs:
           gh release create "v${NEW_VERSION}" \
             --title "v${NEW_VERSION}" \
             --generate-notes \
-            target/vertx-rxjava3-otel-autoconfigure-*.jar \
-            target/vertx-rxjava3-otel-autoconfigure-*-sources.jar
+            "target/vertx-rxjava3-otel-autoconfigure-${NEW_VERSION}.jar" \
+            "target/vertx-rxjava3-otel-autoconfigure-${NEW_VERSION}-sources.jar"
