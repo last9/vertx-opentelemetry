@@ -1,6 +1,7 @@
 package io.vertx.tracing.otel;
 
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
 import io.vertx.core.Launcher;
 import io.vertx.core.VertxOptions;
@@ -86,6 +87,10 @@ public class OtelLauncher extends Launcher {
             // 3. Install RxJava3 context propagation hooks
             RxJava3ContextPropagation.install();
             log.info("RxJava3 context propagation hooks installed");
+
+            // 4. Install OpenTelemetry Logback appender for log export
+            OpenTelemetryAppender.install(openTelemetry);
+            log.info("Logback OpenTelemetry appender installed for log export");
 
             log.info("=== OpenTelemetry Ready ===");
             log.info("All HTTP requests, DB queries, and EventBus messages will be traced automatically.");
