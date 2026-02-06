@@ -1,7 +1,11 @@
 package io.vertx.tracing.otel;
 
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
+import io.opentelemetry.context.propagation.ContextPropagators;
+import io.opentelemetry.context.propagation.TextMapPropagator;
 import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
 import io.vertx.core.Launcher;
 import io.vertx.core.VertxOptions;
@@ -72,23 +76,28 @@ public class OtelLauncher extends Launcher {
 
         try {
             // 1. Auto-configure OpenTelemetry SDK from OTEL_* environment variables
-            OpenTelemetry openTelemetry = AutoConfiguredOpenTelemetrySdk.builder()
+            OpenTelemetrySdk sdk = AutoConfiguredOpenTelemetrySdk.builder()
                     .setResultAsGlobal()  // Make available via GlobalOpenTelemetry
                     .build()
                     .getOpenTelemetrySdk();
 
             log.info("OpenTelemetry SDK initialized successfully");
 
-            // 2. Configure Vert.x to use OpenTelemetry tracing
+            // 2. Verify propagators are configured for distributed tracing (traceparent header).
+            //    AutoConfigure should set up W3C by default, but fat-jar shading can strip
+            //    META-INF/services and silently break propagation.
+            OpenTelemetry openTelemetry = ensurePropagators(sdk);
+
+            // 3. Configure Vert.x to use OpenTelemetry tracing
             options.setTracingOptions(new OpenTelemetryOptions(openTelemetry));
 
             log.info("Vert.x tracing configured (HTTP server/client, EventBus, SQL client)");
 
-            // 3. Install RxJava3 context propagation hooks
+            // 4. Install RxJava3 context propagation hooks
             RxJava3ContextPropagation.install();
             log.info("RxJava3 context propagation hooks installed");
 
-            // 4. Install OpenTelemetry Logback appender for log export
+            // 5. Install OpenTelemetry Logback appender for log export
             OpenTelemetryAppender.install(openTelemetry);
             log.info("Logback OpenTelemetry appender installed for log export");
 
@@ -99,6 +108,26 @@ public class OtelLauncher extends Launcher {
             log.error("Failed to initialize OpenTelemetry: {}", e.getMessage(), e);
             log.warn("Application will start WITHOUT tracing.");
         }
+    }
+
+    /**
+     * Verify W3C trace context propagators are configured. If auto-configuration failed to
+     * register them (e.g. fat-jar shading stripped META-INF/services), rebuild the SDK with
+     * the W3C propagator explicitly set.
+     */
+    private static OpenTelemetry ensurePropagators(OpenTelemetrySdk sdk) {
+        TextMapPropagator propagator = sdk.getPropagators().getTextMapPropagator();
+        if (propagator.fields().contains("traceparent")) {
+            log.info("W3C trace context propagation configured (traceparent header enabled)");
+            return sdk;
+        }
+        log.warn("W3C trace context propagator not found in auto-configuration — "
+                + "this can happen when fat-jar shading strips META-INF/services. "
+                + "Registering W3CTraceContextPropagator explicitly.");
+        return OpenTelemetrySdk.builder()
+                .setTracerProvider(sdk.getSdkTracerProvider())
+                .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
+                .build();
     }
 
     private static String getEnvOrDefault(String key, String defaultValue) {

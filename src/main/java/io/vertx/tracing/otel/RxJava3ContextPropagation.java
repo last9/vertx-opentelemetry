@@ -61,6 +61,7 @@ public class RxJava3ContextPropagation {
         // Hook for Single - most commonly used in Vert.x
         Function existingSingleHook = RxJavaPlugins.getOnSingleAssembly();
         RxJavaPlugins.setOnSingleAssembly(single -> {
+            if (!hasActiveContext()) return existingSingleHook != null ? (Single) existingSingleHook.apply(single) : single;
             Single result = new ContextPropagationSingle<>(single);
             return existingSingleHook != null ? (Single) existingSingleHook.apply(result) : result;
         });
@@ -68,6 +69,7 @@ public class RxJava3ContextPropagation {
         // Hook for Maybe
         Function existingMaybeHook = RxJavaPlugins.getOnMaybeAssembly();
         RxJavaPlugins.setOnMaybeAssembly(maybe -> {
+            if (!hasActiveContext()) return existingMaybeHook != null ? (Maybe) existingMaybeHook.apply(maybe) : maybe;
             Maybe result = new ContextPropagationMaybe<>(maybe);
             return existingMaybeHook != null ? (Maybe) existingMaybeHook.apply(result) : result;
         });
@@ -75,6 +77,7 @@ public class RxJava3ContextPropagation {
         // Hook for Completable
         Function existingCompletableHook = RxJavaPlugins.getOnCompletableAssembly();
         RxJavaPlugins.setOnCompletableAssembly(completable -> {
+            if (!hasActiveContext()) return existingCompletableHook != null ? (Completable) existingCompletableHook.apply(completable) : completable;
             Completable result = new ContextPropagationCompletable(completable);
             return existingCompletableHook != null ? (Completable) existingCompletableHook.apply(result) : result;
         });
@@ -82,6 +85,7 @@ public class RxJava3ContextPropagation {
         // Hook for Observable
         Function existingObservableHook = RxJavaPlugins.getOnObservableAssembly();
         RxJavaPlugins.setOnObservableAssembly(observable -> {
+            if (!hasActiveContext()) return existingObservableHook != null ? (Observable) existingObservableHook.apply(observable) : observable;
             Observable result = new ContextPropagationObservable<>(observable);
             return existingObservableHook != null ? (Observable) existingObservableHook.apply(result) : result;
         });
@@ -89,6 +93,7 @@ public class RxJava3ContextPropagation {
         // Hook for Flowable
         Function existingFlowableHook = RxJavaPlugins.getOnFlowableAssembly();
         RxJavaPlugins.setOnFlowableAssembly(flowable -> {
+            if (!hasActiveContext()) return existingFlowableHook != null ? (Flowable) existingFlowableHook.apply(flowable) : flowable;
             Flowable result = new ContextPropagationFlowable<>(flowable);
             return existingFlowableHook != null ? (Flowable) existingFlowableHook.apply(result) : result;
         });
@@ -96,6 +101,14 @@ public class RxJava3ContextPropagation {
         // Hook for schedulers - wrap scheduled runnables with context
         // This is critical for subscribeOn/observeOn operators
         RxJavaPlugins.setScheduleHandler(RxJava3ContextPropagation::wrapWithContext);
+    }
+
+    /**
+     * Check if there is an active (non-root) OpenTelemetry context.
+     * Avoids wrapping overhead when no trace is active.
+     */
+    private static boolean hasActiveContext() {
+        return Context.current() != Context.root();
     }
 
     /**

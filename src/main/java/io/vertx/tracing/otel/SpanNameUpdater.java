@@ -11,24 +11,27 @@ import io.vertx.rxjava3.ext.web.RoutingContext;
  * Utility to update OpenTelemetry span names with the actual route pattern.
  *
  * <p>By default, Vert.x creates HTTP spans with just the method name (GET, POST).
- * This utility updates the span name to include the route pattern (GET /v1/holding).
+ * This utility updates the span name to include the route pattern (GET /v1/users/:id).
  *
- * <h2>Usage Option 1: Add to individual routes</h2>
+ * <h2>Usage Option 1: Use TracedRouter (recommended)</h2>
+ * <pre>{@code
+ * Router router = TracedRouter.create(vertx);
+ * }</pre>
+ *
+ * <h2>Usage Option 2: Add to individual routes</h2>
  * <pre>{@code
  * router.get("/v1/holding")
  *     .handler(SpanNameUpdater::updateSpanName)
  *     .handler(myHandler);
  * }</pre>
  *
- * <h2>Usage Option 2: Add to all routes (recommended)</h2>
- * <pre>{@code
- * // After defining all routes
- * SpanNameUpdater.addToAllRoutes(router);
- * }</pre>
- *
+ * @see TracedRouter
  * @see OtelLauncher
  */
 public class SpanNameUpdater {
+
+    private static final String SPAN_KEY = "otel.span";
+    private static final String ROUTE_KEY = "otel.route";
 
     private SpanNameUpdater() {
         // Utility class
@@ -46,10 +49,7 @@ public class SpanNameUpdater {
             String method = ctx.request().method().name();
             String route = getRoutePath(ctx);
 
-            // Update span name to "GET /v1/holding" format
             span.updateName(method + " " + route);
-
-            // Also set the http.route attribute for better filtering
             span.setAttribute(SemanticAttributes.HTTP_ROUTE, route);
         }
         ctx.next();
@@ -57,39 +57,70 @@ public class SpanNameUpdater {
 
     /**
      * Add span name updater to all routes in the router.
-     * Call this after defining all your routes.
+     * Can be called before or after defining routes.
      *
-     * <p>This adds a global handler with high priority that updates the span name
-     * after the response is complete, ensuring the correct route is captured.
+     * <p>This works in two phases:
+     * <ol>
+     *   <li>A high-priority global handler captures the span reference and stores
+     *       the route path after each handler in the chain</li>
+     *   <li>A response head-end handler updates the span name using the captured
+     *       route path before the response is fully sent</li>
+     * </ol>
      *
      * @param router the Vert.x router
      */
     public static void addToAllRoutes(Router router) {
-        // Add a global handler that runs first
         router.route().order(-1000).handler(ctx -> {
-            // Defer span name update until after route matching and response
-            ctx.addEndHandler(v -> {
-                Span span = Span.current();
-                if (span != null && span.isRecording()) {
-                    String method = ctx.request().method().name();
-                    String route = getRoutePath(ctx);
-                    span.updateName(method + " " + route);
-                    span.setAttribute(SemanticAttributes.HTTP_ROUTE, route);
+            // Capture span while it's still active — vertx-opentelemetry will
+            // end the span when the response completes, so we must grab it now.
+            Span span = Span.current();
+            if (span != null && span.isRecording()) {
+                ctx.put(SPAN_KEY, span);
+            }
 
-                    // Set status code
+            // Use headersEndHandler which fires BEFORE the response body is sent
+            // and before vertx-opentelemetry's sendResponse ends the span.
+            ctx.response().headersEndHandler(v -> {
+                Span captured = ctx.get(SPAN_KEY);
+                if (captured != null && captured.isRecording()) {
+                    String method = ctx.request().method().name();
+
+                    // Prefer the stored route path (set by route-matched handler)
+                    String route = ctx.get(ROUTE_KEY);
+                    if (route == null) {
+                        route = getRoutePath(ctx);
+                    }
+
+                    captured.updateName(method + " " + route);
+                    captured.setAttribute(SemanticAttributes.HTTP_ROUTE, route);
+
                     int statusCode = ctx.response().getStatusCode();
-                    span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, statusCode);
+                    captured.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, statusCode);
                     if (statusCode >= 400) {
-                        span.setStatus(StatusCode.ERROR);
+                        captured.setStatus(StatusCode.ERROR);
                     }
                 }
             });
+
+            ctx.next();
+        });
+
+        // Also register a lower-priority handler that captures the matched route
+        // path. This runs AFTER route matching, so currentRoute() returns the
+        // actual matched route (not our catch-all).
+        router.route().order(Integer.MAX_VALUE - 1).handler(ctx -> {
+            Route currentRoute = ctx.currentRoute();
+            if (currentRoute != null) {
+                String path = currentRoute.getPath();
+                if (path != null && !path.isEmpty()) {
+                    ctx.put(ROUTE_KEY, path);
+                }
+            }
             ctx.next();
         });
     }
 
     private static String getRoutePath(RoutingContext ctx) {
-        // Try to get the matched route path
         Route currentRoute = ctx.currentRoute();
         if (currentRoute != null) {
             String path = currentRoute.getPath();
@@ -98,13 +129,11 @@ public class SpanNameUpdater {
             }
         }
 
-        // Fall back to the normalized path
         String path = ctx.normalizedPath();
         if (path != null && !path.isEmpty()) {
             return path;
         }
 
-        // Last resort - use the request path
         return ctx.request().path();
     }
 }

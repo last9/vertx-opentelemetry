@@ -1,0 +1,104 @@
+# .github/workflows/release.yaml
+name: Release on Version Change
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Run tests
+        run: mvn test -B --no-transfer-progress
+
+  release:
+    needs: test
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR merge commit
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          git fetch origin main
+          git checkout "$MERGE_SHA"
+
+      - name: Get previous commit on main
+        id: prev_commit
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          PREV_COMMIT=$(git rev-parse "${MERGE_SHA}^")
+          echo "prev_commit=$PREV_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version changed in pom.xml
+        id: version_change
+        env:
+          PREV_COMMIT: ${{ steps.prev_commit.outputs.prev_commit }}
+        run: |
+          OLD_VERSION=$(git show "${PREV_COMMIT}:pom.xml" | grep -m1 '<version>' | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+          NEW_VERSION=$(grep -m1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+          echo "old_version=$OLD_VERSION" >> "$GITHUB_OUTPUT"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$OLD_VERSION" != "$NEW_VERSION" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Java
+        if: steps.version_change.outputs.changed == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build JAR
+        if: steps.version_change.outputs.changed == 'true'
+        run: mvn package -B --no-transfer-progress -DskipTests
+
+      - name: Create tag
+        if: steps.version_change.outputs.changed == 'true'
+        env:
+          NEW_VERSION: ${{ steps.version_change.outputs.new_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
+
+      - name: Create GitHub Release with JAR
+        if: steps.version_change.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.version_change.outputs.new_version }}
+        run: |
+          gh release create "v${NEW_VERSION}" \
+            --title "v${NEW_VERSION}" \
+            --generate-notes \
+            target/vertx-rxjava3-otel-autoconfigure-*.jar \
+            target/vertx-rxjava3-otel-autoconfigure-*-sources.jar
