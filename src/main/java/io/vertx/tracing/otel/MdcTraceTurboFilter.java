@@ -69,10 +69,8 @@ public class MdcTraceTurboFilter extends TurboFilter {
         if (spanContext.isValid()) {
             MDC.put(TRACE_ID_KEY, spanContext.getTraceId());
             MDC.put(SPAN_ID_KEY, spanContext.getSpanId());
-        } else {
-            // Clear MDC if no valid span context
-            MDC.remove(TRACE_ID_KEY);
-            MDC.remove(SPAN_ID_KEY);
         }
+        // Don't clear MDC when no span — avoids interfering with MDC values
+        // set by other libraries or user code outside a traced request.
     }
 }

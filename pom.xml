@@ -6,7 +6,7 @@
 
     <groupId>io.vertx.tracing</groupId>
     <artifactId>vertx-rxjava3-otel-autoconfigure</artifactId>
-    <version>1.0.0</version>
+    <version>0.9.0</version>
     <packaging>jar</packaging>
 
     <name>Vert.x RxJava3 OpenTelemetry Auto-Configure</name>
@@ -161,6 +161,50 @@
             <version>${logback.version}</version>
             <scope>provided</scope>
         </dependency>
+
+        <!-- ==================== Test Dependencies ==================== -->
+
+        <!-- JUnit 5 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.1</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- AssertJ -->
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.24.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- OpenTelemetry SDK Testing (InMemorySpanExporter) -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Vert.x JUnit 5 -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Vert.x Web Client (for integration tests) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web-client</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Note: vertx-core, vertx-web, vertx-rx-java3, and logback-classic
+             are declared as 'provided' scope above. Maven makes provided-scope
+             dependencies available during test compilation and execution,
+             so no duplicate declarations are needed here. -->
     </dependencies>
 
     <build>
@@ -198,6 +242,11 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.3</version>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
