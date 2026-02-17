@@ -131,12 +131,16 @@ Logback OpenTelemetry appender installed for log export
 - **Route-pattern span names** like `GET /v1/users/:id` (not `GET /v1/users/42`)
 - **Distributed tracing** via W3C `traceparent` header propagation
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
-- **Log correlation** — every log line can include `trace_id` and `span_id` via MDC
-- **Log export** — logs sent to your OTLP endpoint alongside traces
+- **Log-to-trace correlation** — every log line includes `trace_id` and `span_id`, so you can jump from a log line to its trace in your observability platform
+- **Log export** — logs sent to your OTLP endpoint alongside traces, with trace context automatically attached
 
-## Log Correlation
+## Log-to-Trace Correlation
 
-Add the MDC TurboFilter to your `logback.xml` to inject `trace_id` and `span_id` into every log line:
+The library provides two levels of log-trace integration:
+
+### 1. MDC injection (trace_id and span_id in every log line)
+
+Add `MdcTraceTurboFilter` to your `logback.xml`. This injects `trace_id` and `span_id` into Logback's MDC before every log event, so you can search logs by trace ID or click through from a log line to its trace.
 
 ```xml
 <configuration>
@@ -154,7 +158,15 @@ Add the MDC TurboFilter to your `logback.xml` to inject `trace_id` and `span_id`
 </configuration>
 ```
 
-To also export logs via OTLP, add the OpenTelemetry Logback appender (no extra dependency needed — `OtelLauncher` calls `OpenTelemetryAppender.install()` automatically):
+Example log output:
+
+```
+14:23:01.456 [vert.x-eventloop-thread-0] INFO  c.e.UserHandler trace_id=4bf92f3577b34da6a3ce929d0e0e4736 span_id=00f067aa0ba902b7 Fetching user 42
+```
+
+### 2. OTLP log export (logs sent alongside traces)
+
+Add the OpenTelemetry Logback appender to also export logs via OTLP. Exported logs automatically carry trace context, enabling log-to-trace correlation in backends like Grafana, Datadog, or Last9. No extra dependency needed — `OtelLauncher` calls `OpenTelemetryAppender.install()` automatically.
 
 ```xml
     <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
@@ -167,6 +179,8 @@ To also export logs via OTLP, add the OpenTelemetry Logback appender (no extra d
         <appender-ref ref="OTEL"/>
     </root>
 ```
+
+> **Why MdcTraceTurboFilter?** Standard OpenTelemetry Logback MDC instrumentation relies on `ThreadLocal`, which doesn't work with Vert.x's event-loop context model. This TurboFilter bridges that gap by reading the current span directly from the OpenTelemetry context.
 
 ## Vert.x 3: Outgoing HTTP Tracing
 
