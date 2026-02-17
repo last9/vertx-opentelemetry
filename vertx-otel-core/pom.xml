@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.last9</groupId>
+        <artifactId>vertx-otel-autoconfigure</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>vertx-otel-core</artifactId>
+    <packaging>jar</packaging>
+
+    <name>Vert.x OTel Core</name>
+    <description>
+        Shared OpenTelemetry utilities: SDK auto-configuration, Logback MDC trace injection.
+        No Vert.x dependency — used by both Vert.x 3 and Vert.x 4 modules.
+    </description>
+
+    <dependencies>
+        <!-- OpenTelemetry SDK Auto-Configure -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-extension-autoconfigure</artifactId>
+        </dependency>
+
+        <!-- OpenTelemetry OTLP Exporter -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
+        <!-- OpenTelemetry Semantic Conventions -->
+        <dependency>
+            <groupId>io.opentelemetry.semconv</groupId>
+            <artifactId>opentelemetry-semconv</artifactId>
+        </dependency>
+
+        <!-- OpenTelemetry Logback Appender (for log export via OTLP) -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-logback-appender-1.0</artifactId>
+            <version>${opentelemetry-instrumentation.version}-alpha</version>
+        </dependency>
+
+        <!-- OpenTelemetry Logback MDC (for trace_id/span_id injection) -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-logback-mdc-1.0</artifactId>
+            <version>${opentelemetry-instrumentation.version}-alpha</version>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Automatic-Module-Name>io.last9.tracing.otel</Automatic-Module-Name>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

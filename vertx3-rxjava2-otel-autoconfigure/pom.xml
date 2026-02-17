@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.last9</groupId>
+        <artifactId>vertx-otel-autoconfigure</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
+    <packaging>jar</packaging>
+
+    <name>Vert.x 3 RxJava2 OpenTelemetry Auto-Configure</name>
+    <description>
+        Zero-code OpenTelemetry auto-instrumentation for Vert.x 3 + RxJava2 applications.
+        Provides automatic tracing for HTTP server/client, EventBus, and RxJava2 context propagation.
+    </description>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Vert.x 3 BOM -->
+            <dependency>
+                <groupId>io.vertx</groupId>
+                <artifactId>vertx-stack-depchain</artifactId>
+                <version>${vertx3.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Core module (OTel SDK setup, MdcTraceTurboFilter) -->
+        <dependency>
+            <groupId>io.last9</groupId>
+            <artifactId>vertx-otel-core</artifactId>
+        </dependency>
+
+        <!-- OpenTelemetry SDK (for manual span creation - no VertxTracer SPI in v3) -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk</artifactId>
+        </dependency>
+
+        <!-- OpenTelemetry Semantic Conventions (for HTTP span attributes) -->
+        <dependency>
+            <groupId>io.opentelemetry.semconv</groupId>
+            <artifactId>opentelemetry-semconv</artifactId>
+        </dependency>
+
+        <!-- Logback (provided via core, needed at test time for MdcTraceTurboFilter tests) -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Vert.x Core (provided - app will have this) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Vert.x Web (provided - for SpanNameUpdater) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Vert.x RxJava2 (provided - app may have this) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-rx-java2</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- ==================== Test Dependencies ==================== -->
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web-client</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Automatic-Module-Name>io.last9.tracing.otel.v3</Automatic-Module-Name>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

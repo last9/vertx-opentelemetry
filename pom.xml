@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.last9</groupId>
+    <artifactId>vertx-otel-autoconfigure</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>Vert.x OpenTelemetry Auto-Configure</name>
+    <description>
+        Zero-code OpenTelemetry auto-instrumentation for Vert.x applications.
+        Supports Vert.x 4 + RxJava 3 and Vert.x 3 + RxJava 2.
+    </description>
+    <url>https://github.com/last9/vertx-opentelemetry</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Last9</name>
+            <email>support@last9.io</email>
+            <organization>Last9</organization>
+            <organizationUrl>https://last9.io</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:git://github.com/last9/vertx-opentelemetry.git</connection>
+        <developerConnection>scm:git:ssh://github.com:last9/vertx-opentelemetry.git</developerConnection>
+        <url>https://github.com/last9/vertx-opentelemetry</url>
+    </scm>
+
+    <modules>
+        <module>vertx-otel-core</module>
+        <module>vertx4-rxjava3-otel-autoconfigure</module>
+        <module>vertx3-rxjava2-otel-autoconfigure</module>
+    </modules>
+
+    <properties>
+        <java.version>17</java.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <!-- OpenTelemetry -->
+        <opentelemetry.version>1.35.0</opentelemetry.version>
+        <opentelemetry-instrumentation.version>2.4.0</opentelemetry-instrumentation.version>
+        <opentelemetry-semconv.version>1.23.1-alpha</opentelemetry-semconv.version>
+
+        <!-- Vert.x -->
+        <vertx4.version>4.5.10</vertx4.version>
+        <vertx3.version>3.9.16</vertx3.version>
+
+        <!-- Logging -->
+        <slf4j.version>2.0.12</slf4j.version>
+        <logback.version>1.5.3</logback.version>
+
+        <!-- Test -->
+        <junit.version>5.10.1</junit.version>
+        <assertj.version>3.27.7</assertj.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- OpenTelemetry BOM -->
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-bom</artifactId>
+                <version>${opentelemetry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- OpenTelemetry Instrumentation BOM -->
+            <dependency>
+                <groupId>io.opentelemetry.instrumentation</groupId>
+                <artifactId>opentelemetry-instrumentation-bom</artifactId>
+                <version>${opentelemetry-instrumentation.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- OpenTelemetry Semantic Conventions -->
+            <dependency>
+                <groupId>io.opentelemetry.semconv</groupId>
+                <artifactId>opentelemetry-semconv</artifactId>
+                <version>${opentelemetry-semconv.version}</version>
+            </dependency>
+
+            <!-- Core module -->
+            <dependency>
+                <groupId>io.last9</groupId>
+                <artifactId>vertx-otel-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- Logging -->
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ch.qos.logback</groupId>
+                <artifactId>logback-classic</artifactId>
+                <version>${logback.version}</version>
+            </dependency>
+
+            <!-- Test -->
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${junit.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.assertj</groupId>
+                <artifactId>assertj-core</artifactId>
+                <version>${assertj.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.12.1</version>
+                    <configuration>
+                        <source>${java.version}</source>
+                        <target>${java.version}</target>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.3.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-source-plugin</artifactId>
+                    <version>3.3.0</version>
+                    <executions>
+                        <execution>
+                            <id>attach-sources</id>
+                            <goals>
+                                <goal>jar-no-fork</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.2.3</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>3.6.3</version>
+                    <executions>
+                        <execution>
+                            <id>attach-javadocs</id>
+                            <goals>
+                                <goal>jar</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>
