@@ -14,7 +14,7 @@ The standard OpenTelemetry Java Agent has [known issues](https://github.com/open
 
 **Root cause**: The agent assumes ThreadLocal-based context, but Vert.x uses its own Context model.
 
-This library uses Vert.x's native tracing integration, properly handling context across async boundaries and RxJava operators.
+This library integrates with Vert.x's native tracing SPI (v4) or provides handler-based instrumentation (v3), properly handling context across async boundaries and RxJava operators.
 
 ## Choose Your Module
 
@@ -128,6 +128,9 @@ Router router = TracedRouter.create(vertx);
 import io.last9.tracing.otel.v3.TracedRouter;
 
 Router router = TracedRouter.create(vertx);
+
+// Or, with an explicit OpenTelemetry instance:
+Router router = TracedRouter.create(vertx, openTelemetry);
 ```
 
 This changes span names from `GET` to `GET /v1/users/:id` — using the route pattern, not the actual path.
