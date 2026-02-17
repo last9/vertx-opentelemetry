@@ -253,4 +253,4 @@ Contributions welcome — please open an issue or submit a pull request.
 ## Support
 
 - [GitHub Issues](https://github.com/last9/vertx-opentelemetry/issues)
-- [Last9 Documentation](https://docs.last9.io)
+- [Last9 Documentation](https://last9.io/docs)

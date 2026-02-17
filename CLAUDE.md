@@ -4,6 +4,10 @@
 
 Multi-module Maven project providing zero-code OpenTelemetry auto-instrumentation for Vert.x applications. Two version-specific modules share a common core.
 
+- **Last9 homepage**: https://last9.io
+- **Last9 docs**: https://last9.io/docs
+- **GitHub repo**: https://github.com/last9/vertx-opentelemetry
+
 ## Architecture
 
 ```
