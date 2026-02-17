@@ -1,76 +1,39 @@
 # Vert.x OpenTelemetry Auto-Configure
 
-Zero-code OpenTelemetry auto-instrumentation for Vert.x applications. Supports both Vert.x 4 + RxJava 3 and Vert.x 3 + RxJava 2.
+Drop-in OpenTelemetry instrumentation for Vert.x applications. Add the JAR, swap your main class, and get distributed tracing, log correlation, and RxJava context propagation — all configured via standard `OTEL_*` environment variables.
 
-## Why This Library?
-
-The standard OpenTelemetry Java Agent has [known issues](https://github.com/open-telemetry/opentelemetry-java-instrumentation/issues?q=vertx) with Vert.x:
-
-| Issue | Impact |
-|-------|--------|
-| [#11860](https://github.com/open-telemetry/opentelemetry-java-instrumentation/issues/11860) | Context lost after async HTTP client/gRPC calls |
-| [#10526](https://github.com/open-telemetry/opentelemetry-java-instrumentation/issues/10526) | Virtual threads break spans in Java 21 |
-| RxJava instrumentation | Context propagation only - no span creation |
-
-**Root cause**: The agent assumes ThreadLocal-based context, but Vert.x uses its own Context model.
-
-This library integrates with Vert.x's native tracing SPI (v4) or provides handler-based instrumentation (v3), properly handling context across async boundaries and RxJava operators.
-
-## Choose Your Module
-
-| Your Stack | Module | Maven Artifact |
-|------------|--------|---------------|
-| Vert.x 4.5+ / RxJava 3 | `vertx4-rxjava3-otel-autoconfigure` | `io.last9:vertx4-rxjava3-otel-autoconfigure:1.0.0` |
-| Vert.x 3.9+ / RxJava 2 | `vertx3-rxjava2-otel-autoconfigure` | `io.last9:vertx3-rxjava2-otel-autoconfigure:1.0.0` |
-
-Both modules share the same API surface (`OtelLauncher`, `TracedRouter`, `RxJavaContextPropagation`) with version-appropriate implementations.
-
-## Features
-
-- **Zero code changes** - just add the dependency and use `OtelLauncher`
-- **Distributed tracing** via W3C `traceparent` header
-- **RxJava context propagation** across all operators and schedulers
-- **Log correlation** with `trace_id` and `span_id` in MDC
-- **Log export** via OTLP (automatic Logback appender integration)
-- **Standard OTEL_* environment variables** for configuration
+| Your Stack | Module |
+|------------|--------|
+| Vert.x 4.5+ / RxJava 3 | `vertx4-rxjava3-otel-autoconfigure` |
+| Vert.x 3.9+ / RxJava 2 | `vertx3-rxjava2-otel-autoconfigure` |
 
 ## Quick Start
 
-### 1. Add Dependency
+### 1. Install the JAR
 
-Download the JAR from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases) and install it to your local Maven repository:
-
-**Vert.x 4 + RxJava 3:**
+Download from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases) and install to your local Maven repository:
 
 ```bash
-mvn install:install-file \
-  -Dfile=vertx4-rxjava3-otel-autoconfigure-1.0.0.jar \
-  -DgroupId=io.last9 \
-  -DartifactId=vertx4-rxjava3-otel-autoconfigure \
-  -Dversion=1.0.0 \
-  -Dpackaging=jar
+# For Vert.x 4:
+mvn install:install-file -Dfile=vertx4-rxjava3-otel-autoconfigure-1.0.0.jar \
+  -DgroupId=io.last9 -DartifactId=vertx4-rxjava3-otel-autoconfigure -Dversion=1.0.0 -Dpackaging=jar
+
+# For Vert.x 3:
+mvn install:install-file -Dfile=vertx3-rxjava2-otel-autoconfigure-1.0.0.jar \
+  -DgroupId=io.last9 -DartifactId=vertx3-rxjava2-otel-autoconfigure -Dversion=1.0.0 -Dpackaging=jar
 ```
 
+Then add to your `pom.xml`:
+
 ```xml
+<!-- Vert.x 4 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
     <version>1.0.0</version>
 </dependency>
-```
 
-**Vert.x 3 + RxJava 2:**
-
-```bash
-mvn install:install-file \
-  -Dfile=vertx3-rxjava2-otel-autoconfigure-1.0.0.jar \
-  -DgroupId=io.last9 \
-  -DartifactId=vertx3-rxjava2-otel-autoconfigure \
-  -Dversion=1.0.0 \
-  -Dpackaging=jar
-```
-
-```xml
+<!-- OR Vert.x 3 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
@@ -78,93 +41,106 @@ mvn install:install-file \
 </dependency>
 ```
 
-### 2. Set Main Class
+### 2. Use OtelLauncher as your main class
 
-Configure your fat JAR to use `OtelLauncher`:
-
-**Vert.x 4:**
+In your Maven shade/fat-jar plugin configuration:
 
 ```xml
+<!-- Vert.x 4 -->
 <mainClass>io.last9.tracing.otel.v4.OtelLauncher</mainClass>
-```
 
-**Vert.x 3:**
-
-```xml
+<!-- Vert.x 3 -->
 <mainClass>io.last9.tracing.otel.v3.OtelLauncher</mainClass>
 ```
 
-### 3. Configure Environment Variables
+<details>
+<summary>Example: maven-shade-plugin configuration</summary>
+
+```xml
+<plugin>
+    <groupId>org.apache.maven.plugins</groupId>
+    <artifactId>maven-shade-plugin</artifactId>
+    <executions>
+        <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+                <transformers>
+                    <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                        <mainClass>io.last9.tracing.otel.v4.OtelLauncher</mainClass>
+                    </transformer>
+                    <!-- Required: merge OpenTelemetry SPI files -->
+                    <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                </transformers>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+</details>
+
+### 3. Use TracedRouter instead of Router
+
+Replace `Router.router(vertx)` with `TracedRouter.create(vertx)` in your verticle:
+
+```java
+// Before
+Router router = Router.router(vertx);
+
+// After — Vert.x 4
+import io.last9.tracing.otel.v4.TracedRouter;
+Router router = TracedRouter.create(vertx);
+
+// After — Vert.x 3
+import io.last9.tracing.otel.v3.TracedRouter;
+Router router = TracedRouter.create(vertx);
+```
+
+This gives you:
+- **Vert.x 4**: Route-pattern span names (`GET /v1/users/:id` instead of just `GET`)
+- **Vert.x 3**: Full HTTP tracing with span creation, `traceparent` extraction, and route-pattern span names
+
+> **Note**: For Vert.x 3, `TracedRouter` is required for HTTP tracing — there is no built-in tracing SPI.
+
+### 4. Set environment variables and run
 
 ```bash
 export OTEL_SERVICE_NAME=my-service
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://your-otlp-endpoint
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <token>"
-```
 
-### 4. Run Your Application
-
-```bash
 java -jar app.jar run com.example.MainVerticle
 ```
 
-That's it! All HTTP requests and logs are now traced automatically.
+You'll see in your application logs:
 
-## Better Span Names with TracedRouter
-
-Use `TracedRouter` for automatic route-pattern span names:
-
-**Vert.x 4:**
-
-```java
-import io.last9.tracing.otel.v4.TracedRouter;
-
-Router router = TracedRouter.create(vertx);
+```
+=== OpenTelemetry Auto-Configuration ===
+Service: my-service
+OTLP Endpoint: https://your-otlp-endpoint
+OpenTelemetry SDK initialized successfully
+W3C trace context propagation configured (traceparent header enabled)
+Logback OpenTelemetry appender installed for log export
+=== OpenTelemetry Ready ===
 ```
 
-**Vert.x 3:**
+## What You Get
 
-```java
-import io.last9.tracing.otel.v3.TracedRouter;
+- **HTTP spans** for every incoming request, with method, path, status code
+- **Route-pattern span names** like `GET /v1/users/:id` (not `GET /v1/users/42`)
+- **Distributed tracing** via W3C `traceparent` header propagation
+- **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
+- **Log-to-trace correlation** — every log line includes `trace_id` and `span_id`, so you can jump from a log line to its trace in your observability platform
+- **Log export** — logs sent to your OTLP endpoint alongside traces, with trace context automatically attached
 
-Router router = TracedRouter.create(vertx);
+## Log-to-Trace Correlation
 
-// Or, with an explicit OpenTelemetry instance:
-Router router = TracedRouter.create(vertx, openTelemetry);
-```
+The library provides two levels of log-trace integration:
 
-This changes span names from `GET` to `GET /v1/users/:id` — using the route pattern, not the actual path.
+### 1. MDC injection (trace_id and span_id in every log line)
 
-## Auto-Instrumented Components
-
-### Vert.x 4
-
-Any Vert.x 4 client created from a traced `Vertx` instance is **automatically instrumented** via the `vertx-opentelemetry` module:
-
-| Component | Vert.x Module | Auto-Instrumented |
-|-----------|--------------|-------------------|
-| HTTP Server | `vertx-core` | Yes |
-| HTTP Client | `vertx-core` | Yes |
-| EventBus | `vertx-core` | Yes |
-| PostgreSQL | `vertx-pg-client` | Yes |
-| MySQL | `vertx-mysql-client` | Yes |
-| Redis | `vertx-redis-client` | Yes |
-| Kafka | `vertx-kafka-client` | Yes |
-| gRPC | `vertx-grpc` | Yes |
-
-### Vert.x 3
-
-Vert.x 3 does not have a built-in tracing SPI, so instrumentation is handler-based via `TracedRouter`:
-
-| Component | How | Notes |
-|-----------|-----|-------|
-| HTTP Server (incoming) | `TracedRouter.create(vertx)` | Automatic span creation |
-| HTTP Client (outgoing) | Manual header injection | See [Distributed Tracing](#distributed-tracing) |
-| RxJava operators | `RxJava2ContextPropagation.install()` | Automatic (done by OtelLauncher) |
-
-## Log Correlation
-
-Add the MDC TurboFilter to your `logback.xml` to inject `trace_id` and `span_id` into every log line:
+Add `MdcTraceTurboFilter` to your `logback.xml`. This injects `trace_id` and `span_id` into Logback's MDC before every log event, so you can search logs by trace ID or click through from a log line to its trace.
 
 ```xml
 <configuration>
@@ -172,7 +148,7 @@ Add the MDC TurboFilter to your `logback.xml` to inject `trace_id` and `span_id`
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - trace_id=%X{trace_id} span_id=%X{span_id} - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} trace_id=%X{trace_id} span_id=%X{span_id} %msg%n</pattern>
         </encoder>
     </appender>
 
@@ -182,7 +158,15 @@ Add the MDC TurboFilter to your `logback.xml` to inject `trace_id` and `span_id`
 </configuration>
 ```
 
-To export logs via OTLP, add the OpenTelemetry appender:
+Example log output:
+
+```
+14:23:01.456 [vert.x-eventloop-thread-0] INFO  c.e.UserHandler trace_id=4bf92f3577b34da6a3ce929d0e0e4736 span_id=00f067aa0ba902b7 Fetching user 42
+```
+
+### 2. OTLP log export (logs sent alongside traces)
+
+Add the OpenTelemetry Logback appender to also export logs via OTLP. Exported logs automatically carry trace context, enabling log-to-trace correlation in backends like Grafana, Datadog, or Last9. No extra dependency needed — `OtelLauncher` calls `OpenTelemetryAppender.install()` automatically.
 
 ```xml
     <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
@@ -196,19 +180,11 @@ To export logs via OTLP, add the OpenTelemetry appender:
     </root>
 ```
 
-`OtelLauncher` calls `OpenTelemetryAppender.install(openTelemetry)` automatically.
+> **Why MdcTraceTurboFilter?** Standard OpenTelemetry Logback MDC instrumentation relies on `ThreadLocal`, which doesn't work with Vert.x's event-loop context model. This TurboFilter bridges that gap by reading the current span directly from the OpenTelemetry context.
 
-## Distributed Tracing
+## Vert.x 3: Outgoing HTTP Tracing
 
-### Vert.x 4
-
-Automatic W3C `traceparent` propagation for both incoming and outgoing HTTP requests. Works with any Vert.x HttpClient created from a traced Vertx instance.
-
-### Vert.x 3
-
-**Incoming**: Automatic — `TracedRouter` extracts `traceparent` from incoming requests and creates child spans.
-
-**Outgoing**: Manual injection required (Vert.x 3 has no tracing SPI for HTTP client):
+Vert.x 3 has no tracing SPI for its HTTP client, so outgoing requests need manual `traceparent` injection:
 
 ```java
 import io.opentelemetry.api.GlobalOpenTelemetry;
@@ -220,7 +196,25 @@ GlobalOpenTelemetry.get().getPropagators().getTextMapPropagator()
             (req, key, value) -> req.putHeader(key, value));
 ```
 
+Vert.x 4 handles this automatically for any `HttpClient` created from the traced `Vertx` instance.
+
+## Vert.x 4: Auto-Instrumented Components
+
+Any Vert.x 4 client created from a traced `Vertx` instance is automatically instrumented:
+
+| Component | Vert.x Module |
+|-----------|--------------|
+| HTTP Server/Client | `vertx-core` |
+| EventBus | `vertx-core` |
+| PostgreSQL | `vertx-pg-client` |
+| MySQL | `vertx-mysql-client` |
+| Redis | `vertx-redis-client` |
+| Kafka | `vertx-kafka-client` |
+| gRPC | `vertx-grpc` |
+
 ## Environment Variables
+
+All standard [OpenTelemetry environment variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/) are supported. Key ones:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -228,29 +222,18 @@ GlobalOpenTelemetry.get().getPropagators().getTextMapPropagator()
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL | `http://localhost:4318` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Auth headers (URL-encoded) | - |
 | `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes | - |
-| `OTEL_LOGS_EXPORTER` | Log exporter (`otlp`/`none`) | `otlp` |
+| `OTEL_LOGS_EXPORTER` | Log exporter (`otlp` / `none`) | `otlp` |
 | `OTEL_TRACES_SAMPLER` | Sampling strategy | `parentbased_always_on` |
 
-## Architecture
+## Why Not the OTel Java Agent?
 
-```
-vertx-otel-autoconfigure (parent)
-├── vertx-otel-core              # Shared: OtelSdkSetup, MdcTraceTurboFilter
-├── vertx4-rxjava3-otel-autoconfigure  # Vert.x 4 + RxJava 3 integration
-└── vertx3-rxjava2-otel-autoconfigure  # Vert.x 3 + RxJava 2 integration
-```
+The standard OpenTelemetry Java Agent assumes `ThreadLocal`-based context propagation, but Vert.x uses its own event-loop context model. This causes:
 
-### Components
+- Trace context lost after async HTTP client calls ([#11860](https://github.com/open-telemetry/opentelemetry-java-instrumentation/issues/11860))
+- Broken spans with virtual threads on Java 21 ([#10526](https://github.com/open-telemetry/opentelemetry-java-instrumentation/issues/10526))
+- RxJava operators lose trace context across thread hops
 
-| Class | Package (v4) | Package (v3) | Purpose |
-|-------|-------------|-------------|---------|
-| `OtelLauncher` | `io.last9.tracing.otel.v4` | `io.last9.tracing.otel.v3` | Main entry point |
-| `TracedRouter` | `io.last9.tracing.otel.v4` | `io.last9.tracing.otel.v3` | Router with tracing |
-| `RxJava3ContextPropagation` | `io.last9.tracing.otel.v4` | - | RxJava 3 context hooks |
-| `RxJava2ContextPropagation` | - | `io.last9.tracing.otel.v3` | RxJava 2 context hooks |
-| `SpanNameUpdater` | `io.last9.tracing.otel.v4` | `io.last9.tracing.otel.v3` | Route-pattern span names |
-| `MdcTraceTurboFilter` | `io.last9.tracing.otel` | `io.last9.tracing.otel` | MDC trace injection |
-| `OtelSdkSetup` | `io.last9.tracing.otel` | `io.last9.tracing.otel` | SDK auto-configuration |
+This library works with Vert.x's context model instead of fighting it — using the native `VertxTracer` SPI (v4) or handler-based instrumentation (v3), with RxJava assembly hooks to propagate context across all operators.
 
 ## Requirements
 
@@ -265,7 +248,7 @@ MIT
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request.
+Contributions welcome — please open an issue or submit a pull request.
 
 ## Support
 
