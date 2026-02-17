@@ -14,7 +14,7 @@
         Zero-code OpenTelemetry auto-instrumentation for Vert.x applications.
         Supports Vert.x 4 + RxJava 3 and Vert.x 3 + RxJava 2.
     </description>
-    <url>https://github.com/last9/vertx-rxjava3-otel-autoconfigure</url>
+    <url>https://github.com/last9/vertx-opentelemetry</url>
 
     <licenses>
         <license>
@@ -33,9 +33,9 @@
     </developers>
 
     <scm>
-        <connection>scm:git:git://github.com/last9/vertx-rxjava3-otel-autoconfigure.git</connection>
-        <developerConnection>scm:git:ssh://github.com:last9/vertx-rxjava3-otel-autoconfigure.git</developerConnection>
-        <url>https://github.com/last9/vertx-rxjava3-otel-autoconfigure</url>
+        <connection>scm:git:git://github.com/last9/vertx-opentelemetry.git</connection>
+        <developerConnection>scm:git:ssh://github.com:last9/vertx-opentelemetry.git</developerConnection>
+        <url>https://github.com/last9/vertx-opentelemetry</url>
     </scm>
 
     <modules>
