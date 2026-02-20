@@ -79,6 +79,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Vert.x Kafka client (provided - app will have this if using Kafka) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-kafka-client</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- ==================== Test Dependencies ==================== -->
 
         <dependency>
@@ -110,6 +117,7 @@
             <artifactId>vertx-web-client</artifactId>
             <scope>test</scope>
         </dependency>
+
     </dependencies>
 
     <build>
