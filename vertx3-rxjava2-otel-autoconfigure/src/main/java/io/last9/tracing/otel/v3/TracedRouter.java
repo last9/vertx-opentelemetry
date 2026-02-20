@@ -27,17 +27,30 @@ import io.vertx.reactivex.ext.web.RoutingContext;
  *   <li>Extracts W3C {@code traceparent} headers for distributed tracing</li>
  *   <li>Sets HTTP semantic convention attributes on spans</li>
  *   <li>Updates span names with matched route patterns (e.g., {@code GET /v1/users/:id})</li>
+ *   <li>Buffers the request body so {@link RoutingContext#getBodyAsJson()} and
+ *       {@link RoutingContext#getBody()} work in handlers without a separate
+ *       {@code BodyHandler}</li>
  * </ul>
+ *
+ * <p><strong>Do not add {@code BodyHandler.create()} to the router.</strong>
+ * {@code TracedRouter} buffers the request body itself and calls {@code ctx.next()} only
+ * after the body has arrived. Adding a separate {@code BodyHandler} will conflict with
+ * this mechanism.
  *
  * <h2>Usage</h2>
  * <pre>{@code
  * // Instead of: Router router = Router.router(vertx);
  * Router router = TracedRouter.create(vertx);
  *
- * router.get("/v1/users/:id").handler(ctx -> { ... });
+ * // No BodyHandler needed — body is already available:
+ * router.post("/v1/items").handler(ctx -> {
+ *     JsonObject body = ctx.getBodyAsJson();
+ *     ...
+ * });
  * }</pre>
  *
  * @see OtelLauncher
+ * @see ClientTracing
  */
 public final class TracedRouter {
 
@@ -133,10 +146,24 @@ public final class TracedRouter {
             // 4. End span when response body is fully sent
             ctx.response().bodyEndHandler(v -> span.end());
 
-            // 5. Make span current for synchronous handler chain + RxJava propagation
-            try (Scope ignored = span.makeCurrent()) {
-                ctx.next();
-            }
+            // 5. Build the OTel context containing the new span
+            Context otelContext = parentContext.with(span);
+
+            // 6. Buffer the request body, then advance the handler chain with the span
+            //    active in the OTel ThreadLocal. Using bodyHandler (rather than calling
+            //    ctx.next() synchronously) is critical: Vert.x 3 always delivers body
+            //    data asynchronously via request.endHandler, even for requests with no
+            //    body. A synchronous try-with-resources would close the scope before
+            //    downstream handlers run, making Span.current() return the root (no-op)
+            //    span and leaving trace_id/span_id empty in log MDC.
+            request.bodyHandler(body -> {
+                if (body.length() > 0) {
+                    ctx.setBody(body);
+                }
+                try (Scope ignored = otelContext.makeCurrent()) {
+                    ctx.next();
+                }
+            });
         });
 
         // Low-priority handler: capture the matched route path after route matching

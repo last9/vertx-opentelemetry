@@ -99,9 +99,11 @@ Router router = TracedRouter.create(vertx);
 
 This gives you:
 - **Vert.x 4**: Route-pattern span names (`GET /v1/users/:id` instead of just `GET`)
-- **Vert.x 3**: Full HTTP tracing with span creation, `traceparent` extraction, and route-pattern span names
+- **Vert.x 3**: Full HTTP tracing with span creation, `traceparent` extraction, route-pattern span names, and request body buffering
 
 > **Note**: For Vert.x 3, `TracedRouter` is required for HTTP tracing — there is no built-in tracing SPI.
+
+> **Vert.x 3 — do not add `BodyHandler`**: `TracedRouter` buffers the request body itself before calling your handler, so `ctx.getBodyAsJson()` and `ctx.getBody()` work out of the box. Adding `BodyHandler.create()` will conflict with this mechanism.
 
 ### 4. Set environment variables and run
 
@@ -184,19 +186,24 @@ Add the OpenTelemetry Logback appender to also export logs via OTLP. Exported lo
 
 ## Vert.x 3: Outgoing HTTP Tracing
 
-Vert.x 3 has no tracing SPI for its HTTP client, so outgoing requests need manual `traceparent` injection:
+Vert.x 3 has no tracing SPI for its HTTP client, so outgoing requests do not carry `traceparent`
+automatically. Without it, downstream services create new root spans and the trace chain breaks.
+
+Use `ClientTracing.inject()` to propagate the current span's context into any `WebClient` request:
 
 ```java
-import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.context.Context;
+import io.last9.tracing.otel.v3.ClientTracing;
 
-// In your handler, inject traceparent into outgoing requests:
-GlobalOpenTelemetry.get().getPropagators().getTextMapPropagator()
-    .inject(Context.current(), httpClientRequest,
-            (req, key, value) -> req.putHeader(key, value));
+// Wrap the request with ClientTracing.inject() before calling rxSend():
+ClientTracing.inject(webClient.getAbs(pricingServiceUrl + "/v1/price/" + symbol))
+    .rxSend()
+    .subscribe(...);
 ```
 
-Vert.x 4 handles this automatically for any `HttpClient` created from the traced `Vertx` instance.
+Call `inject` inside a `TracedRouter` handler — the span is current at that point, so the
+`traceparent` header will be set correctly. If called outside an active span, the call is a no-op.
+
+Vert.x 4 handles outgoing HTTP propagation automatically for any client created from the traced `Vertx` instance.
 
 ## Vert.x 4: Auto-Instrumented Components
 
