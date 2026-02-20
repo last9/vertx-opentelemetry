@@ -9,6 +9,7 @@ import io.reactivex.Single;
 import io.reactivex.plugins.RxJavaPlugins;
 import io.reactivex.schedulers.Schedulers;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.json.JsonObject;
 import io.vertx.junit5.VertxExtension;
 import io.vertx.junit5.VertxTestContext;
 import io.vertx.reactivex.core.Vertx;
@@ -81,6 +82,40 @@ class VertxOtelIntegrationTest {
         });
 
         router.get("/api/error").handler(ctx -> ctx.response().setStatusCode(500).end("error"));
+
+        // POST handler: verifies body is readable AND span is current (Bug 1 regression test).
+        // TracedRouter buffers the body before calling ctx.next(), so ctx.getBodyAsJson() must
+        // work here without a separate BodyHandler.
+        router.post("/api/echo").handler(ctx -> {
+            String traceId = Span.current().getSpanContext().getTraceId();
+            JsonObject body = ctx.getBodyAsJson();
+            String msg = body != null ? body.getString("msg", "null") : "null";
+            ctx.response()
+                    .putHeader("content-type", "application/json")
+                    .end(new JsonObject().put("msg", msg).put("traceId", traceId).encode());
+        });
+
+        // Downstream receiver: echoes back the traceparent header it received.
+        router.get("/api/downstream").handler(ctx -> {
+            String traceparent = ctx.request().getHeader("traceparent");
+            ctx.response()
+                    .putHeader("content-type", "application/json")
+                    .end(new JsonObject()
+                            .put("traceparent", traceparent != null ? traceparent : "missing")
+                            .encode());
+        });
+
+        // Propagation test: calls /api/downstream using ClientTracing.inject() to propagate
+        // the current span's trace context into the outgoing request. Uses the two-arg overload
+        // so the test SDK (not GlobalOpenTelemetry) resolves the propagator.
+        router.get("/api/propagation-test").handler(ctx -> {
+            ClientTracing.inject(webClient.get(port, "localhost", "/api/downstream"), otel.getOpenTelemetry())
+                    .rxSend()
+                    .subscribe(
+                            resp -> ctx.response().end(resp.bodyAsString()),
+                            err -> ctx.response().setStatusCode(500).end(err.getMessage())
+                    );
+        });
 
         vertx.createHttpServer()
                 .requestHandler(router)
@@ -218,6 +253,61 @@ class VertxOtelIntegrationTest {
                                 SpanData serverSpan = findServerSpan();
                                 assertThat(serverSpan.getStatus().getStatusCode())
                                         .isEqualTo(StatusCode.ERROR);
+                            });
+                            testContext.completeNow();
+                        },
+                        testContext::failNow
+                );
+
+        assertThat(testContext.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
+    @Test
+    void postHandlerBodyReadableAndSpanCurrent(VertxTestContext testContext) throws Exception {
+        // Regression test for Bug 1: span scope was closed before user handlers ran because
+        // BodyHandler is async in Vert.x 3. After the fix, TracedRouter buffers the body via
+        // request.bodyHandler() so ctx.next() is only called after body arrival — with the
+        // span still active in the OTel ThreadLocal.
+        JsonObject requestBody = new JsonObject().put("msg", "hello");
+
+        webClient.post(port, "localhost", "/api/echo")
+                .putHeader("content-type", "application/json")
+                .rxSendJsonObject(requestBody)
+                .subscribe(
+                        resp -> {
+                            testContext.verify(() -> {
+                                JsonObject responseBody = resp.bodyAsJsonObject();
+                                // Body was readable via ctx.getBodyAsJson()
+                                assertThat(responseBody.getString("msg")).isEqualTo("hello");
+                                // Span.current() returned a valid span (trace_id is non-zero)
+                                String traceId = responseBody.getString("traceId");
+                                assertThat(traceId).matches("[0-9a-f]{32}");
+                                assertThat(traceId).isNotEqualTo("00000000000000000000000000000000");
+                            });
+                            testContext.completeNow();
+                        },
+                        testContext::failNow
+                );
+
+        assertThat(testContext.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
+    @Test
+    void clientTracingInjectsTraceparentHeader(VertxTestContext testContext) throws Exception {
+        // Regression test for Bug 2: outgoing WebClient calls in Vert.x 3 don't automatically
+        // carry traceparent (no client SPI). ClientTracing.inject() uses the OTel propagator to
+        // write the current span's context into the request headers, linking the downstream span
+        // to the same trace.
+        webClient.get(port, "localhost", "/api/propagation-test")
+                .rxSend()
+                .subscribe(
+                        resp -> {
+                            testContext.verify(() -> {
+                                JsonObject body = resp.bodyAsJsonObject();
+                                String traceparent = body.getString("traceparent");
+                                // The downstream service received a valid traceparent header
+                                assertThat(traceparent).isNotEqualTo("missing");
+                                assertThat(traceparent).startsWith("00-");
                             });
                             testContext.completeNow();
                         },
