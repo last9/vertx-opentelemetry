@@ -133,6 +133,7 @@ Logback OpenTelemetry appender installed for log export
 - **Route-pattern span names** like `GET /v1/users/:id` (not `GET /v1/users/42`)
 - **Distributed tracing** via W3C `traceparent` header propagation
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
+- **Kafka consumer tracing** (Vert.x 4) — `KafkaTracing.tracedBatchHandler()` creates a CONSUMER span per batch so `trace_id` appears in logs inside the handler
 - **Log-to-trace correlation** — every log line includes `trace_id` and `span_id`, so you can jump from a log line to its trace in your observability platform
 - **Log export** — logs sent to your OTLP endpoint alongside traces, with trace context automatically attached
 
@@ -216,8 +217,35 @@ Any Vert.x 4 client created from a traced `Vertx` instance is automatically inst
 | PostgreSQL | `vertx-pg-client` |
 | MySQL | `vertx-mysql-client` |
 | Redis | `vertx-redis-client` |
-| Kafka | `vertx-kafka-client` |
+| Kafka producer / consumer poll | `vertx-kafka-client` |
 | gRPC | `vertx-grpc` |
+
+### Vert.x 4: Kafka batch consumer
+
+The `VertxTracer` SPI does not instrument `KafkaConsumer.batchHandler()` callbacks, so
+`trace_id` and `span_id` are empty in log lines produced inside a batch handler by default.
+Use `KafkaTracing.tracedBatchHandler()` to wrap the handler with a CONSUMER span:
+
+```java
+import io.last9.tracing.otel.v4.KafkaTracing;
+
+// In your verticle's start() method:
+consumer.batchHandler(KafkaTracing.tracedBatchHandler(topicName, this::handleBatch));
+
+private void handleBatch(KafkaConsumerRecords<String, String> records) {
+    // Span.current() is now the CONSUMER span — trace_id appears in logs
+    logger.info("Processing {} records", records.size());
+    ...
+}
+```
+
+The wrapper creates a span named `kafka.consume.batch` with kind `CONSUMER` and sets:
+- `messaging.system` = `kafka`
+- `messaging.destination.name` = the topic name you pass in
+- `messaging.batch.message_count` = `records.size()`
+
+Exceptions thrown by the handler are recorded on the span before being re-thrown, and the span is
+always ended in a `finally` block.
 
 ## Environment Variables
 

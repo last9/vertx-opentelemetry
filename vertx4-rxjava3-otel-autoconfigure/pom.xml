@@ -66,6 +66,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Vert.x Kafka client (provided - app will have this if using Kafka) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-kafka-client</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Logback (provided via core, needed at test time for MdcTraceTurboFilter tests) -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
@@ -102,6 +109,12 @@
         <dependency>
             <groupId>io.vertx</groupId>
             <artifactId>vertx-web-client</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-kafka-client</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
