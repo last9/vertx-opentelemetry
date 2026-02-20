@@ -24,8 +24,9 @@ import io.vertx.reactivex.ext.web.client.HttpRequest;
  * }</pre>
  *
  * <p>Call {@code inject} inside a handler that runs while a span is active (i.e., inside a
- * {@link TracedRouter} route handler). If called outside an active span, the propagator
- * injects a no-op {@code traceparent} and has no effect.
+ * {@link TracedRouter} route handler). If called outside an active span, the W3C propagator
+ * writes no headers at all — it checks {@code spanContext.isValid()} and returns early without
+ * invoking the setter, so the request is returned unchanged.
  *
  * @see TracedRouter
  */
