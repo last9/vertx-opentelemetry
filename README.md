@@ -134,6 +134,8 @@ Logback OpenTelemetry appender installed for log export
 - **Distributed tracing** via W3C `traceparent` header propagation
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
 - **Kafka consumer tracing** (Vert.x 3 + 4) — `KafkaTracing.tracedBatchHandler()` creates a CONSUMER span per batch so `trace_id` appears in logs inside the handler
+- **Database tracing** (Vert.x 3) — `DbTracing` wraps any database call (MySQL, Aerospike, etc.) with a CLIENT span using OTel DB semantic conventions
+- **Auto-propagating WebClient** (Vert.x 3) — `TracedWebClient` auto-injects `traceparent` on every outgoing request — no per-call wrapping needed
 - **Log-to-trace correlation** — every log line includes `trace_id` and `span_id`, so you can jump from a log line to its trace in your observability platform
 - **Log export** — logs sent to your OTLP endpoint alongside traces, with trace context automatically attached
 
@@ -190,21 +192,81 @@ Add the OpenTelemetry Logback appender to also export logs via OTLP. Exported lo
 Vert.x 3 has no tracing SPI for its HTTP client, so outgoing requests do not carry `traceparent`
 automatically. Without it, downstream services create new root spans and the trace chain breaks.
 
-Use `ClientTracing.inject()` to propagate the current span's context into any `WebClient` request:
+### Option 1: TracedWebClient (recommended)
+
+Use `TracedWebClient` as a drop-in replacement for `WebClient`. It auto-injects `traceparent` on
+every outgoing request — no per-call wrapping needed:
+
+```java
+import io.last9.tracing.otel.v3.TracedWebClient;
+
+// Instead of: WebClient client = WebClient.create(vertx);
+WebClient client = TracedWebClient.create(vertx);
+
+// traceparent is injected automatically:
+client.getAbs(pricingServiceUrl + "/v1/price/" + symbol)
+    .rxSend()
+    .subscribe(...);
+```
+
+You can also wrap an existing `WebClient`:
+
+```java
+WebClient traced = TracedWebClient.wrap(existingClient);
+```
+
+### Option 2: Per-request injection
+
+If you prefer fine-grained control, use `ClientTracing.inject()` on individual requests:
 
 ```java
 import io.last9.tracing.otel.v3.ClientTracing;
 
-// Wrap the request with ClientTracing.inject() before calling rxSend():
 ClientTracing.inject(webClient.getAbs(pricingServiceUrl + "/v1/price/" + symbol))
     .rxSend()
     .subscribe(...);
 ```
 
-Call `inject` inside a `TracedRouter` handler — the span is current at that point, so the
-`traceparent` header will be set correctly. If called outside an active span, the call is a no-op.
+Both approaches require an active span (e.g., inside a `TracedRouter` handler). If called outside
+an active span, no `traceparent` header is set.
 
 Vert.x 4 handles outgoing HTTP propagation automatically for any client created from the traced `Vertx` instance.
+
+## Vert.x 3: Database Tracing
+
+Vert.x 3 has no SPI for database clients, so MySQL, Aerospike, and other DB calls produce no
+spans by default. `DbTracing` wraps any database operation with a CLIENT span:
+
+```java
+import io.last9.tracing.otel.v3.DbTracing;
+
+// Create once per database:
+DbTracing db = DbTracing.create("mysql", "orders_db");
+
+// Wrap RxJava operations — span is created and ended automatically:
+db.traceSingle("SELECT * FROM orders WHERE id = ?", () ->
+        sqlClient.rxQueryWithParams(sql, params))
+    .subscribe(resultSet -> { ... });
+
+// For completable operations (INSERT, UPDATE, DELETE):
+db.traceCompletable("DELETE FROM cache WHERE expired = true", () ->
+        sqlClient.rxUpdate(sql).ignoreElement())
+    .subscribe();
+```
+
+For synchronous clients like the Aerospike Java client:
+
+```java
+DbTracing aerospike = DbTracing.create("aerospike", "my-namespace");
+
+Record result = aerospike.traceSync("GET user:123", () ->
+        aerospikeClient.get(null, key));
+```
+
+Each span is named `{db.system} {operation}` (e.g., `mysql SELECT * FROM orders`) with attributes:
+- `db.system` = the database identifier you provide
+- `db.statement` = the operation description
+- `db.name` = the database/namespace name
 
 ## Vert.x 4: Auto-Instrumented Components
 
@@ -299,8 +361,8 @@ This library works with Vert.x's context model instead of fighting it — using 
 
 | Module | Java | Vert.x | RxJava |
 |--------|------|--------|--------|
-| `vertx4-rxjava3-otel-autoconfigure` | 17+ | 4.5+ | 3.x |
-| `vertx3-rxjava2-otel-autoconfigure` | 17+ | 3.9+ | 2.x |
+| `vertx4-rxjava3-otel-autoconfigure` | 11+ | 4.5+ | 3.x |
+| `vertx3-rxjava2-otel-autoconfigure` | 11+ | 3.9+ | 2.x |
 
 ## License
 
