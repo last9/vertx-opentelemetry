@@ -46,12 +46,6 @@ class TracedWebClientTest {
                     .end(new JsonObject().put("traceparent", traceparent).encode());
         });
 
-        vertx.createHttpServer()
-                .requestHandler(router)
-                .rxListen(0)
-                .blockingGet()
-                .actualPort();
-
         int port = vertx.createHttpServer()
                 .requestHandler(router)
                 .rxListen(0)

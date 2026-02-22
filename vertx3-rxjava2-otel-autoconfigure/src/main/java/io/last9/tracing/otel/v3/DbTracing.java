@@ -19,7 +19,7 @@ import java.util.function.Supplier;
  *
  * <p>Vert.x 3 has no {@code VertxTracer} SPI, so database clients (MySQL, Aerospike, etc.)
  * produce no spans automatically. This utility wraps RxJava 2 database operations with a
- * CLIENT span that captures {@code db.system}, {@code db.statement}, and {@code db.namespace}
+ * CLIENT span that captures {@code db.system}, {@code db.statement}, and {@code db.name}
  * using OpenTelemetry semantic conventions.
  *
  * <p>Works with any database client — no dependency on a specific driver.
@@ -103,17 +103,23 @@ public final class DbTracing {
         return Single.defer(() -> {
             Span span = startSpan(operation);
             Scope scope = span.makeCurrent();
-            return singleSupplier.get()
-                    .doOnSuccess(v -> {
-                        scope.close();
-                        span.end();
-                    })
-                    .doOnError(err -> {
-                        span.recordException(err);
-                        span.setStatus(StatusCode.ERROR, err.getMessage());
-                        scope.close();
-                        span.end();
-                    });
+            try {
+                return singleSupplier.get()
+                        .doOnError(err -> {
+                            span.recordException(err);
+                            span.setStatus(StatusCode.ERROR, err.getMessage());
+                        })
+                        .doFinally(() -> {
+                            scope.close();
+                            span.end();
+                        });
+            } catch (Throwable t) {
+                span.recordException(t);
+                span.setStatus(StatusCode.ERROR, t.getMessage());
+                scope.close();
+                span.end();
+                throw t;
+            }
         });
     }
 
@@ -128,17 +134,23 @@ public final class DbTracing {
         return Completable.defer(() -> {
             Span span = startSpan(operation);
             Scope scope = span.makeCurrent();
-            return completableSupplier.get()
-                    .doOnComplete(() -> {
-                        scope.close();
-                        span.end();
-                    })
-                    .doOnError(err -> {
-                        span.recordException(err);
-                        span.setStatus(StatusCode.ERROR, err.getMessage());
-                        scope.close();
-                        span.end();
-                    });
+            try {
+                return completableSupplier.get()
+                        .doOnError(err -> {
+                            span.recordException(err);
+                            span.setStatus(StatusCode.ERROR, err.getMessage());
+                        })
+                        .doFinally(() -> {
+                            scope.close();
+                            span.end();
+                        });
+            } catch (Throwable t) {
+                span.recordException(t);
+                span.setStatus(StatusCode.ERROR, t.getMessage());
+                scope.close();
+                span.end();
+                throw t;
+            }
         });
     }
 
@@ -154,21 +166,23 @@ public final class DbTracing {
         return Maybe.defer(() -> {
             Span span = startSpan(operation);
             Scope scope = span.makeCurrent();
-            return maybeSupplier.get()
-                    .doOnSuccess(v -> {
-                        scope.close();
-                        span.end();
-                    })
-                    .doOnComplete(() -> {
-                        scope.close();
-                        span.end();
-                    })
-                    .doOnError(err -> {
-                        span.recordException(err);
-                        span.setStatus(StatusCode.ERROR, err.getMessage());
-                        scope.close();
-                        span.end();
-                    });
+            try {
+                return maybeSupplier.get()
+                        .doOnError(err -> {
+                            span.recordException(err);
+                            span.setStatus(StatusCode.ERROR, err.getMessage());
+                        })
+                        .doFinally(() -> {
+                            scope.close();
+                            span.end();
+                        });
+            } catch (Throwable t) {
+                span.recordException(t);
+                span.setStatus(StatusCode.ERROR, t.getMessage());
+                scope.close();
+                span.end();
+                throw t;
+            }
         });
     }
 
