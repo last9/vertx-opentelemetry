@@ -49,7 +49,7 @@ import io.vertx.reactivex.ext.web.client.WebClient;
  * @see ClientTracing
  * @see TracedRouter
  */
-public class TracedWebClient extends WebClient {
+public final class TracedWebClient extends WebClient {
 
     private final WebClient delegate;
     private final OpenTelemetry openTelemetry;
