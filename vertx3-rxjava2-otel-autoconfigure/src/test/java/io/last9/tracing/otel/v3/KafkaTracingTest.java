@@ -1,5 +1,6 @@
 package io.last9.tracing.otel.v3;
 
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
@@ -38,6 +39,8 @@ class KafkaTracingTest {
         otel.shutdown();
     }
 
+    // ---- Consumer (batch handler) tests ----
+
     @Test
     void batchHandlerCreatesConsumerSpan() {
         AtomicReference<String> capturedTraceId = new AtomicReference<>();
@@ -54,7 +57,8 @@ class KafkaTracingTest {
         assertThat(spans).hasSize(1);
         SpanData span = spans.get(0);
 
-        assertThat(span.getName()).isEqualTo("kafka.consume.batch");
+        // OTel convention: span name = "{destination} {operation}"
+        assertThat(span.getName()).isEqualTo("orders process");
         assertThat(span.getKind()).isEqualTo(SpanKind.CONSUMER);
 
         // Span was current inside the handler — trace_id was non-zero
@@ -79,15 +83,30 @@ class KafkaTracingTest {
         traced.handle(new KafkaConsumerRecordsImpl<>(rawRecords));
 
         SpanData span = spanExporter.getFinishedSpanItems().get(0);
-        assertThat(span.getAttributes().get(
-                io.opentelemetry.api.common.AttributeKey.stringKey("messaging.system")))
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.system")))
                 .isEqualTo("kafka");
-        assertThat(span.getAttributes().get(
-                io.opentelemetry.api.common.AttributeKey.stringKey("messaging.destination.name")))
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.destination.name")))
                 .isEqualTo(topic);
-        assertThat(span.getAttributes().get(
-                io.opentelemetry.api.common.AttributeKey.longKey("messaging.batch.message_count")))
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.operation")))
+                .isEqualTo("process");
+        assertThat(span.getAttributes().get(AttributeKey.longKey("messaging.batch.message_count")))
                 .isEqualTo(3L);
+    }
+
+    @Test
+    void batchHandlerSetsConsumerGroupWhenProvided() {
+        Handler<KafkaConsumerRecords<String, String>> traced = KafkaTracing.tracedBatchHandler(
+                "orders",
+                "order-processors",
+                records -> {},
+                otel.getOpenTelemetry()
+        );
+
+        traced.handle(emptyBatch());
+
+        SpanData span = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.kafka.consumer.group")))
+                .isEqualTo("order-processors");
     }
 
     @Test
