@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-        <version>1.1.0</version>
+        <version>1.2.0</version>
     </parent>
 
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
@@ -86,6 +86,28 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Vert.x SQL common (provided - app will have this if using JDBC/MySQL/PostgreSQL) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-sql-common</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Vert.x Redis client (provided - app will have this if using Redis) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-redis-client</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Aerospike client (provided - app will have this if using Aerospike) -->
+        <dependency>
+            <groupId>com.aerospike</groupId>
+            <artifactId>aerospike-client</artifactId>
+            <version>${aerospike-client.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- ==================== Test Dependencies ==================== -->
 
         <dependency>
@@ -115,7 +137,7 @@
         <dependency>
             <groupId>io.vertx</groupId>
             <artifactId>vertx-web-client</artifactId>
-            <scope>test</scope>
+            <scope>provided</scope>
         </dependency>
 
     </dependencies>
