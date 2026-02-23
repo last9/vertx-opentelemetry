@@ -2,12 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
-    branches: [main]
+    branches: ["**"]
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -22,3 +25,15 @@ jobs:
 
       - name: Run tests
         run: mvn test -B --no-transfer-progress
+
+      - name: Build JARs
+        run: mvn package -B --no-transfer-progress -DskipTests
+
+      - name: Upload JARs
+        uses: actions/upload-artifact@v4
+        with:
+          name: jars-${{ github.sha }}
+          retention-days: 14
+          path: |
+            vertx4-rxjava3-otel-autoconfigure/target/*.jar
+            vertx3-rxjava2-otel-autoconfigure/target/*.jar
