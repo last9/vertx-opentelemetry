@@ -63,6 +63,9 @@
         <slf4j.version>2.0.12</slf4j.version>
         <logback.version>1.5.3</logback.version>
 
+        <!-- Aerospike -->
+        <aerospike-client.version>7.2.1</aerospike-client.version>
+
         <!-- Test -->
         <junit.version>5.10.1</junit.version>
         <assertj.version>3.27.7</assertj.version>
