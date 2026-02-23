@@ -275,7 +275,22 @@ an active span, no `traceparent` header is set.
 
 Vert.x 4 handles outgoing HTTP propagation automatically for any client created from the traced `Vertx` instance.
 
-## Troubleshooting: Disconnected Traces
+## Troubleshooting
+
+### All requests appear in one giant trace (cascading spans)
+
+If every HTTP request on the same event-loop thread shows up as part of a single cascading trace
+instead of independent traces per request, you are likely using a version older than 1.3.0.
+
+**Cause**: Vert.x 3 runs all handlers on a single event-loop thread. Earlier versions of
+`TracedRouter` used `Context.current()` to extract `traceparent`, which meant each new request
+inherited the previous request's span context from the thread-local.
+
+**Fix**: Upgrade to the latest version. `TracedRouter` now uses `Context.root()` so each
+incoming request starts with a clean context. If a valid `traceparent` header is present, it is
+honoured; otherwise the request starts a fresh root trace.
+
+### Disconnected Traces
 
 If your outgoing calls show up as separate root traces instead of being connected to the incoming
 request's trace, work through this checklist:
