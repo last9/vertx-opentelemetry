@@ -94,7 +94,7 @@ public class SpanNameUpdater {
 
                     int statusCode = ctx.response().getStatusCode();
                     captured.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, (long) statusCode);
-                    if (statusCode >= 400) {
+                    if (statusCode >= 500) {
                         captured.setStatus(StatusCode.ERROR);
                     }
                 }
