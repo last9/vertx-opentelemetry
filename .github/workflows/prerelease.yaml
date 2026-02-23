@@ -1,0 +1,63 @@
+name: Pre-release
+
+on:
+  push:
+    tags:
+      - "v*-alpha.*"
+      - "v*-beta.*"
+      - "v*-rc.*"
+
+permissions:
+  contents: write
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        run: mvn test -B --no-transfer-progress
+
+      - name: Build JARs
+        run: mvn package -B --no-transfer-progress -DskipTests
+
+      - name: Rename JARs to match tag version
+        env:
+          TAG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          POM_VERSION=$(grep -m1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+          for module in vertx4-rxjava3-otel-autoconfigure vertx3-rxjava2-otel-autoconfigure; do
+            cd "${module}/target"
+            for jar in "${module}-${POM_VERSION}"*.jar; do
+              new_name="${jar/${POM_VERSION}/${TAG_VERSION}}"
+              [ "$jar" != "$new_name" ] && mv "$jar" "$new_name"
+            done
+            cd ../..
+          done
+
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --prerelease \
+            "vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-${TAG_VERSION}.jar" \
+            "vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-${TAG_VERSION}-sources.jar" \
+            "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${TAG_VERSION}.jar" \
+            "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${TAG_VERSION}-sources.jar"
