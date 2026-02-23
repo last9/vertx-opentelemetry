@@ -232,6 +232,93 @@ an active span, no `traceparent` header is set.
 
 Vert.x 4 handles outgoing HTTP propagation automatically for any client created from the traced `Vertx` instance.
 
+## Troubleshooting: Disconnected Traces
+
+If your outgoing calls show up as separate root traces instead of being connected to the incoming
+request's trace, work through this checklist:
+
+### 1. Verify the propagation chain
+
+Three components must all be in place for distributed traces to work:
+
+```
+TracedRouter (creates SERVER span)
+  → RxJava2ContextPropagation (carries context across thread hops)
+    → TracedWebClient / ClientTracing.inject (writes traceparent header)
+```
+
+If any link is missing, the downstream service receives no `traceparent` and starts a new root trace.
+
+### 2. Check `RxJava2ContextPropagation` is installed
+
+This is the most common cause. OpenTelemetry stores the current span in a `ThreadLocal`. When RxJava
+hops threads (via `subscribeOn`, `observeOn`, `flatMap` with async work), the `ThreadLocal` is empty
+on the new thread — the outgoing call sees no active span and silently writes no header.
+
+If you use `OtelLauncher` as your main class, this is handled automatically. If you have a custom
+main class, you must call it yourself:
+
+```java
+// In your custom launcher or main method, BEFORE deploying verticles:
+OtelSdkSetup.initialize();
+RxJava2ContextPropagation.install();  // <-- don't forget this
+```
+
+### 3. Confirm you're using TracedWebClient or ClientTracing.inject
+
+A plain `WebClient.create(vertx)` never injects trace headers. Verify your outgoing calls use one of:
+
+```java
+// Option A: TracedWebClient (automatic)
+WebClient client = TracedWebClient.create(vertx);
+
+// Option B: Per-request injection
+ClientTracing.inject(webClient.getAbs(url)).rxSend();
+```
+
+### 4. Confirm outgoing calls happen inside a TracedRouter handler
+
+The `traceparent` header is only written when there is an active span. `TracedRouter` opens a span
+scope that covers your handler chain. If you make HTTP calls outside a handler (e.g., in a periodic
+timer, EventBus consumer, or Kafka batch handler), there may be no active span.
+
+For Kafka batch handlers, use `KafkaTracing.tracedBatchHandler()` to create a CONSUMER span first,
+then make outgoing calls inside that handler.
+
+### 5. Verify the downstream service reads `traceparent`
+
+The downstream service must be instrumented with OpenTelemetry (or any W3C Trace Context compatible
+library) and must extract the `traceparent` header from incoming requests. You can verify the header
+is being sent by logging it:
+
+```java
+client.getAbs(url)
+    .rxSend()
+    .doOnSubscribe(d -> {
+        // Check if traceparent was injected
+        logger.info("trace_id={}", Span.current().getSpanContext().getTraceId());
+    })
+    .subscribe(...);
+```
+
+Or check the outgoing request headers in your observability platform's network view.
+
+### 6. Check for context loss in RxJava chains
+
+If you build a request object in one place and subscribe to it later (deferred pattern), the trace
+context is captured at request-creation time, not at subscription time:
+
+```java
+// Context captured HERE (when get() is called):
+HttpRequest<Buffer> req = tracedClient.get(8080, "host", "/api");
+
+// NOT here (when rxSend subscribes):
+req.rxSend().subscribe(...);
+```
+
+Make sure the request is created inside the handler where the span is active — not stored and reused
+across different request contexts.
+
 ## Vert.x 3: Database Tracing
 
 Vert.x 3 has no SPI for database clients, so MySQL, PostgreSQL, Redis, Aerospike, and other DB
