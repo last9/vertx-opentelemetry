@@ -15,12 +15,12 @@ Download from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/rel
 
 ```bash
 # For Vert.x 4:
-mvn install:install-file -Dfile=vertx4-rxjava3-otel-autoconfigure-1.0.0.jar \
-  -DgroupId=io.last9 -DartifactId=vertx4-rxjava3-otel-autoconfigure -Dversion=1.0.0 -Dpackaging=jar
+mvn install:install-file -Dfile=vertx4-rxjava3-otel-autoconfigure-1.2.0.jar \
+  -DgroupId=io.last9 -DartifactId=vertx4-rxjava3-otel-autoconfigure -Dversion=1.2.0 -Dpackaging=jar
 
 # For Vert.x 3:
-mvn install:install-file -Dfile=vertx3-rxjava2-otel-autoconfigure-1.0.0.jar \
-  -DgroupId=io.last9 -DartifactId=vertx3-rxjava2-otel-autoconfigure -Dversion=1.0.0 -Dpackaging=jar
+mvn install:install-file -Dfile=vertx3-rxjava2-otel-autoconfigure-1.2.0.jar \
+  -DgroupId=io.last9 -DartifactId=vertx3-rxjava2-otel-autoconfigure -Dversion=1.2.0 -Dpackaging=jar
 ```
 
 Then add to your `pom.xml`:
@@ -30,14 +30,14 @@ Then add to your `pom.xml`:
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>1.0.0</version>
+    <version>1.2.0</version>
 </dependency>
 
 <!-- OR Vert.x 3 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>1.0.0</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -209,11 +209,34 @@ client.getAbs(pricingServiceUrl + "/v1/price/" + symbol)
     .subscribe(...);
 ```
 
-You can also wrap an existing `WebClient`:
+You can also wrap an existing `WebClient`, including custom subclasses:
 
 ```java
 WebClient traced = TracedWebClient.wrap(existingClient);
 ```
+
+#### Wrapping a custom WebClient subclass
+
+If you have a custom `WebClient` subclass (e.g., one that adds auth headers or correlation IDs),
+`wrap()` preserves your custom behavior. The tracing layer delegates to your client's overridden
+methods and then injects `traceparent` on the result:
+
+```java
+// Your custom WebClient that adds auth headers
+class AuthWebClient extends WebClient {
+    @Override
+    public HttpRequest<Buffer> get(int port, String host, String uri) {
+        return super.get(port, host, uri)
+                .putHeader("Authorization", "Bearer " + token);
+    }
+}
+
+// Wrap it — auth headers AND traceparent are both injected
+WebClient client = TracedWebClient.wrap(new AuthWebClient(vertx));
+```
+
+> **Note**: `TracedWebClient` is `final` and cannot be subclassed. Use `wrap()` to add tracing
+> to your own `WebClient` instances.
 
 ### Option 2: Per-request injection
 
@@ -473,6 +496,18 @@ attributes as the Vert.x 4 variant:
 - `messaging.system` = `kafka`
 - `messaging.destination.name` = the topic name you pass in
 - `messaging.batch.message_count` = `records.size()`
+
+## Pre-release / Beta Builds
+
+To test unreleased changes before a full release:
+
+**Option 1: Download from CI** — every push and PR builds JARs as GitHub Actions artifacts.
+Go to [Actions](https://github.com/last9/vertx-opentelemetry/actions/workflows/ci.yaml), click a
+run, and download the `jars-<sha>` artifact.
+
+**Option 2: Beta releases** — tagged pre-releases (e.g., `v1.3.0-beta.1`) appear on the
+[Releases](https://github.com/last9/vertx-opentelemetry/releases) page marked as "Pre-release"
+with downloadable JARs.
 
 ## Environment Variables
 
