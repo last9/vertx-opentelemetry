@@ -296,6 +296,28 @@ public class TracedWebClient extends WebClient {
         return inject(delegate.requestAbs(method, serverAddress, absoluteURI));
     }
 
+    // ---- RAW (custom HTTP method as String) ----
+
+    @Override
+    public HttpRequest<Buffer> raw(String method, String requestURI) {
+        return inject(delegate.raw(method, requestURI));
+    }
+
+    @Override
+    public HttpRequest<Buffer> raw(String method, int port, String host, String requestURI) {
+        return inject(delegate.raw(method, port, host, requestURI));
+    }
+
+    @Override
+    public HttpRequest<Buffer> raw(String method, String host, String requestURI) {
+        return inject(delegate.raw(method, host, requestURI));
+    }
+
+    @Override
+    public HttpRequest<Buffer> rawAbs(String method, String absoluteURI) {
+        return inject(delegate.rawAbs(method, absoluteURI));
+    }
+
     // ---- Lifecycle ----
 
     @Override

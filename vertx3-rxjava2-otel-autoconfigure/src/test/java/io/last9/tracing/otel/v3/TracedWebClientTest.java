@@ -4,10 +4,13 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.client.WebClientOptions;
 import io.vertx.junit5.VertxExtension;
 import io.vertx.junit5.VertxTestContext;
 import io.vertx.reactivex.core.Vertx;
+import io.vertx.reactivex.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.Router;
+import io.vertx.reactivex.ext.web.client.HttpRequest;
 import io.vertx.reactivex.ext.web.client.WebClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -147,6 +150,126 @@ class TracedWebClientTest {
                     });
                     testCtx.completeNow();
                 }, testCtx::failNow);
+
+        assertThat(testCtx.awaitCompletion(5, TimeUnit.SECONDS)).isTrue();
+    }
+
+    /**
+     * Simulates a customer who has subclassed WebClient to add custom headers
+     * (e.g., auth tokens, correlation IDs) to every request.
+     */
+    static class CustomWebClient extends WebClient {
+        private final String customHeaderValue;
+
+        CustomWebClient(Vertx vertx, String customHeaderValue) {
+            super(WebClient.create(vertx).getDelegate());
+            this.customHeaderValue = customHeaderValue;
+        }
+
+        @Override
+        public HttpRequest<Buffer> get(int port, String host, String requestURI) {
+            return super.get(port, host, requestURI)
+                    .putHeader("X-Custom-Auth", customHeaderValue);
+        }
+
+        @Override
+        public HttpRequest<Buffer> getAbs(String absoluteURI) {
+            return super.getAbs(absoluteURI)
+                    .putHeader("X-Custom-Auth", customHeaderValue);
+        }
+    }
+
+    @Test
+    void wrapPreservesCustomWebClientBehavior(Vertx vertx, VertxTestContext testCtx) throws Exception {
+        // Server that echoes both traceparent and the custom header
+        Router router = Router.router(vertx);
+        router.get("/api/echo").handler(ctx -> {
+            String traceparent = ctx.request().getHeader("traceparent");
+            String customAuth = ctx.request().getHeader("X-Custom-Auth");
+            ctx.response()
+                    .putHeader("content-type", "application/json")
+                    .end(new JsonObject()
+                            .put("traceparent", traceparent)
+                            .put("customAuth", customAuth)
+                            .encode());
+        });
+
+        int port = vertx.createHttpServer()
+                .requestHandler(router)
+                .rxListen(0)
+                .blockingGet()
+                .actualPort();
+
+        // Customer's custom WebClient wrapped with tracing
+        CustomWebClient custom = new CustomWebClient(vertx, "Bearer secret-token");
+        WebClient traced = TracedWebClient.wrap(custom, otel.getOpenTelemetry());
+
+        Span parentSpan = otel.getOpenTelemetry()
+                .getTracer("test")
+                .spanBuilder("test-custom-client")
+                .startSpan();
+
+        try (Scope ignored = parentSpan.makeCurrent()) {
+            traced.get(port, "localhost", "/api/echo")
+                    .rxSend()
+                    .subscribe(response -> {
+                        testCtx.verify(() -> {
+                            JsonObject body = response.bodyAsJsonObject();
+
+                            // traceparent injected by TracedWebClient
+                            assertThat(body.getString("traceparent")).isNotNull();
+                            assertThat(body.getString("traceparent")).startsWith("00-");
+                            assertThat(body.getString("traceparent"))
+                                    .contains(parentSpan.getSpanContext().getTraceId());
+
+                            // custom header preserved from customer's subclass
+                            assertThat(body.getString("customAuth"))
+                                    .isEqualTo("Bearer secret-token");
+                        });
+                        testCtx.completeNow();
+                    }, testCtx::failNow);
+        } finally {
+            parentSpan.end();
+        }
+
+        assertThat(testCtx.awaitCompletion(5, TimeUnit.SECONDS)).isTrue();
+    }
+
+    @Test
+    void rawMethodInjectsTraceparent(Vertx vertx, VertxTestContext testCtx) throws Exception {
+        Router router = Router.router(vertx);
+        router.route("/api/raw").handler(ctx -> {
+            String traceparent = ctx.request().getHeader("traceparent");
+            ctx.response().end(traceparent != null ? traceparent : "missing");
+        });
+
+        int port = vertx.createHttpServer()
+                .requestHandler(router)
+                .rxListen(0)
+                .blockingGet()
+                .actualPort();
+
+        WebClient traced = TracedWebClient.wrap(WebClient.create(vertx), otel.getOpenTelemetry());
+
+        Span parentSpan = otel.getOpenTelemetry()
+                .getTracer("test")
+                .spanBuilder("test-raw")
+                .startSpan();
+
+        try (Scope ignored = parentSpan.makeCurrent()) {
+            traced.raw("GET", port, "localhost", "/api/raw")
+                    .rxSend()
+                    .subscribe(response -> {
+                        testCtx.verify(() -> {
+                            String body = response.bodyAsString();
+                            assertThat(body).startsWith("00-");
+                            assertThat(body).contains(parentSpan.getSpanContext().getTraceId());
+                        });
+                        testCtx.completeNow();
+                    }, testCtx::failNow);
+        } finally {
+            parentSpan.end();
+        }
 
         assertThat(testCtx.awaitCompletion(5, TimeUnit.SECONDS)).isTrue();
     }
