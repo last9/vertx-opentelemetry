@@ -1,12 +1,14 @@
 package io.last9.tracing.otel;
 
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
+import io.opentelemetry.sdk.resources.Resource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,8 +47,16 @@ public final class OtelSdkSetup {
         log.info("Service: {}", serviceName);
         log.info("OTLP Endpoint: {}", otlpEndpoint);
 
-        // 1. Auto-configure OpenTelemetry SDK from OTEL_* environment variables
+        // 1. Auto-configure OpenTelemetry SDK from OTEL_* environment variables.
+        //    Set telemetry.distro.name so that OTel Collector transform processors
+        //    (which map new semconv attributes like http.request.method to legacy
+        //    names like http.method) can match on this resource attribute.
         OpenTelemetrySdk sdk = AutoConfiguredOpenTelemetrySdk.builder()
+                .addResourceCustomizer((resource, config) ->
+                        resource.merge(Resource.builder()
+                                .put(AttributeKey.stringKey("telemetry.distro.name"),
+                                        "opentelemetry-java-instrumentation")
+                                .build()))
                 .setResultAsGlobal()
                 .build()
                 .getOpenTelemetrySdk();

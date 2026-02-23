@@ -13,21 +13,29 @@ import io.vertx.reactivex.ext.web.client.HttpRequest;
  * span rather than a child of the current trace, breaking the distributed trace chain and
  * causing spans to appear disconnected in your observability platform.
  *
- * <h2>Usage</h2>
+ * <h2>Usage (recommended) — with CLIENT span</h2>
  * <pre>{@code
  * import io.last9.tracing.otel.v3.ClientTracing;
  *
- * // Wrap the request before calling rxSend():
- * ClientTracing.inject(webClient.getAbs(pricingServiceUrl + "/v1/price/" + symbol))
+ * // Creates a CLIENT span and injects traceparent from it:
+ * ClientTracing.traced(webClient.getAbs(pricingServiceUrl + "/v1/price/" + symbol))
  *     .rxSend()
  *     .subscribe(...);
  * }</pre>
  *
- * <p>Call {@code inject} inside a handler that runs while a span is active (i.e., inside a
- * {@link TracedRouter} route handler). If called outside an active span, the W3C propagator
- * writes no headers at all — it checks {@code spanContext.isValid()} and returns early without
- * invoking the setter, so the request is returned unchanged.
+ * <h2>Usage (lightweight) — inject only, no CLIENT span</h2>
+ * <pre>{@code
+ * // Only injects traceparent header, no CLIENT span created:
+ * ClientTracing.inject(webClient.getAbs(url))
+ *     .rxSend()
+ *     .subscribe(...);
+ * }</pre>
  *
+ * <p>Call either method inside a handler that runs while a span is active (i.e., inside a
+ * {@link TracedRouter} route handler). If called outside an active span, the W3C propagator
+ * writes no headers at all.
+ *
+ * @see TracedWebClient
  * @see TracedRouter
  */
 public final class ClientTracing {
@@ -37,9 +45,52 @@ public final class ClientTracing {
     }
 
     /**
+     * Wraps the given HTTP request with a {@link TracedHttpRequest} that creates an
+     * OpenTelemetry CLIENT span when {@code rxSend()} is called. The {@code traceparent}
+     * header is injected from the CLIENT span's context, ensuring correct parent-child
+     * relationships in downstream services.
+     *
+     * <p>This is the recommended method — it follows OTel HTTP client semantic conventions.
+     *
+     * @param <T>     the response body type
+     * @param request the outgoing WebClient request
+     * @return a traced request that creates a CLIENT span on send
+     */
+    public static <T> HttpRequest<T> traced(HttpRequest<T> request) {
+        return traced(request, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wraps the given HTTP request with a {@link TracedHttpRequest} using the supplied
+     * {@link OpenTelemetry} instance. Useful in tests.
+     *
+     * @param <T>            the response body type
+     * @param request        the outgoing WebClient request
+     * @param openTelemetry  the OpenTelemetry instance to use
+     * @return a traced request that creates a CLIENT span on send
+     */
+    public static <T> HttpRequest<T> traced(HttpRequest<T> request, OpenTelemetry openTelemetry) {
+        // Extract method and URI from the underlying HttpRequestImpl.
+        // The core HttpRequest interface only has setters; getters are on the impl class.
+        io.vertx.ext.web.client.impl.HttpRequestImpl<?> impl =
+                (io.vertx.ext.web.client.impl.HttpRequestImpl<?>) request.getDelegate();
+        String method = impl.method().name();
+        String host = impl.host();
+        int port = impl.port();
+        String uri = impl.uri();
+        String url = (impl.ssl() != null && impl.ssl() ? "https" : "http")
+                + "://" + host + (port > 0 ? ":" + port : "") + uri;
+        return new TracedHttpRequest<>(request, openTelemetry, method, url);
+    }
+
+    /**
      * Injects the current OpenTelemetry trace context into the given HTTP request as a W3C
      * {@code traceparent} header. Uses {@link GlobalOpenTelemetry#get()} to obtain the
-     * propagator — suitable for production use after {@link OtelLauncher} has initialized the SDK.
+     * propagator.
+     *
+     * <p><strong>Note:</strong> This method only injects the header — it does NOT create a
+     * CLIENT span. For full OTel semantic convention compliance, use {@link #traced(HttpRequest)}
+     * instead.
      *
      * @param <T>     the response body type
      * @param request the outgoing WebClient request
@@ -51,8 +102,11 @@ public final class ClientTracing {
 
     /**
      * Injects the current OpenTelemetry trace context into the given HTTP request using the
-     * supplied {@link OpenTelemetry} instance. Useful when the SDK is not registered globally
-     * (e.g., in tests that construct their own {@code OpenTelemetrySdk}).
+     * supplied {@link OpenTelemetry} instance.
+     *
+     * <p><strong>Note:</strong> This method only injects the header — it does NOT create a
+     * CLIENT span. For full OTel semantic convention compliance, use
+     * {@link #traced(HttpRequest, OpenTelemetry)} instead.
      *
      * @param <T>            the response body type
      * @param request        the outgoing WebClient request
