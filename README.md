@@ -129,13 +129,14 @@ Logback OpenTelemetry appender installed for log export
 
 ## What You Get
 
-- **HTTP spans** for every incoming request, with method, path, status code
+- **SERVER spans** for every incoming request, with method, path, status code
+- **CLIENT spans** for every outgoing HTTP request (Vert.x 3), with `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`
 - **Route-pattern span names** like `GET /v1/users/:id` (not `GET /v1/users/42`)
 - **Distributed tracing** via W3C `traceparent` header propagation
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
 - **Kafka consumer tracing** (Vert.x 3 + 4) — `KafkaTracing.tracedBatchHandler()` creates a CONSUMER span per batch so `trace_id` appears in logs inside the handler
 - **Database tracing** (Vert.x 3) — auto-instrumented wrappers for SQL (`TracedSQLClient`), Redis (`TracedRedisClient`), and Aerospike (`TracedAerospikeClient`), plus generic `DbTracing` for any other database
-- **Auto-propagating WebClient** (Vert.x 3) — `TracedWebClient` auto-injects `traceparent` on every outgoing request — no per-call wrapping needed
+- **Auto-tracing WebClient** (Vert.x 3) — `TracedWebClient` creates CLIENT spans and injects `traceparent` on every outgoing request — no per-call wrapping needed
 - **Log-to-trace correlation** — every log line includes `trace_id` and `span_id`, so you can jump from a log line to its trace in your observability platform
 - **Log export** — logs sent to your OTLP endpoint alongside traces, with trace context automatically attached
 
@@ -189,13 +190,14 @@ Add the OpenTelemetry Logback appender to also export logs via OTLP. Exported lo
 
 ## Vert.x 3: Outgoing HTTP Tracing
 
-Vert.x 3 has no tracing SPI for its HTTP client, so outgoing requests do not carry `traceparent`
-automatically. Without it, downstream services create new root spans and the trace chain breaks.
+Vert.x 3 has no tracing SPI for its HTTP client, so outgoing requests produce no spans and do not
+carry `traceparent` automatically. Without it, downstream services create new root spans and the
+trace chain breaks.
 
 ### Option 1: TracedWebClient (recommended)
 
-Use `TracedWebClient` as a drop-in replacement for `WebClient`. It auto-injects `traceparent` on
-every outgoing request — no per-call wrapping needed:
+Use `TracedWebClient` as a drop-in replacement for `WebClient`. It creates a CLIENT span per
+OTel HTTP semantic conventions and injects `traceparent` on every outgoing request:
 
 ```java
 import io.last9.tracing.otel.v3.TracedWebClient;
@@ -203,11 +205,18 @@ import io.last9.tracing.otel.v3.TracedWebClient;
 // Instead of: WebClient client = WebClient.create(vertx);
 WebClient client = TracedWebClient.create(vertx);
 
-// traceparent is injected automatically:
+// CLIENT span + traceparent injection happen automatically on rxSend():
 client.getAbs(pricingServiceUrl + "/v1/price/" + symbol)
     .rxSend()
     .subscribe(...);
 ```
+
+Each outgoing request produces a CLIENT span with these attributes:
+- `http.request.method` — the HTTP method (GET, POST, etc.)
+- `url.full` — the full request URL
+- `server.address` — the target host
+- `server.port` — the target port
+- `http.response.status_code` — the response status code
 
 You can also wrap an existing `WebClient`, including custom subclasses:
 
@@ -219,7 +228,7 @@ WebClient traced = TracedWebClient.wrap(existingClient);
 
 If you have a custom `WebClient` subclass (e.g., one that adds auth headers or correlation IDs),
 `wrap()` preserves your custom behavior. The tracing layer delegates to your client's overridden
-methods and then injects `traceparent` on the result:
+methods and then creates a CLIENT span with `traceparent` injection on `rxSend()`:
 
 ```java
 // Your custom WebClient that adds auth headers
@@ -231,21 +240,32 @@ class AuthWebClient extends WebClient {
     }
 }
 
-// Wrap it — auth headers AND traceparent are both injected
+// Wrap it — auth headers AND traceparent are both present, CLIENT span is created
 WebClient client = TracedWebClient.wrap(new AuthWebClient(vertx));
 ```
 
 > **Note**: `TracedWebClient` is `final` and cannot be subclassed. Use `wrap()` to add tracing
 > to your own `WebClient` instances.
 
-### Option 2: Per-request injection
+### Option 2: Per-request tracing with ClientTracing
 
-If you prefer fine-grained control, use `ClientTracing.inject()` on individual requests:
+For fine-grained control, use `ClientTracing.traced()` on individual requests. This creates a
+CLIENT span with full OTel semantic conventions:
 
 ```java
 import io.last9.tracing.otel.v3.ClientTracing;
 
-ClientTracing.inject(webClient.getAbs(pricingServiceUrl + "/v1/price/" + symbol))
+// Recommended: creates CLIENT span + injects traceparent
+ClientTracing.traced(webClient.getAbs(pricingServiceUrl + "/v1/price/" + symbol))
+    .rxSend()
+    .subscribe(...);
+```
+
+For lightweight header-only injection (no CLIENT span), use `ClientTracing.inject()`:
+
+```java
+// Only injects traceparent header, no CLIENT span created
+ClientTracing.inject(webClient.getAbs(url))
     .rxSend()
     .subscribe(...);
 ```
@@ -267,7 +287,7 @@ Three components must all be in place for distributed traces to work:
 ```
 TracedRouter (creates SERVER span)
   → RxJava2ContextPropagation (carries context across thread hops)
-    → TracedWebClient / ClientTracing.inject (writes traceparent header)
+    → TracedWebClient / ClientTracing.traced (creates CLIENT span + writes traceparent)
 ```
 
 If any link is missing, the downstream service receives no `traceparent` and starts a new root trace.
@@ -287,15 +307,19 @@ OtelSdkSetup.initialize();
 RxJava2ContextPropagation.install();  // <-- don't forget this
 ```
 
-### 3. Confirm you're using TracedWebClient or ClientTracing.inject
+### 3. Confirm you're using TracedWebClient or ClientTracing.traced
 
-A plain `WebClient.create(vertx)` never injects trace headers. Verify your outgoing calls use one of:
+A plain `WebClient.create(vertx)` never creates CLIENT spans or injects trace headers. Verify your
+outgoing calls use one of:
 
 ```java
-// Option A: TracedWebClient (automatic)
+// Option A: TracedWebClient (automatic — CLIENT span + traceparent)
 WebClient client = TracedWebClient.create(vertx);
 
-// Option B: Per-request injection
+// Option B: Per-request tracing (CLIENT span + traceparent)
+ClientTracing.traced(webClient.getAbs(url)).rxSend();
+
+// Option C: Header-only injection (no CLIENT span)
 ClientTracing.inject(webClient.getAbs(url)).rxSend();
 ```
 
@@ -328,19 +352,20 @@ Or check the outgoing request headers in your observability platform's network v
 
 ### 6. Check for context loss in RxJava chains
 
-If you build a request object in one place and subscribe to it later (deferred pattern), the trace
-context is captured at request-creation time, not at subscription time:
+The CLIENT span and `traceparent` injection happen when `rxSend()` subscribes, so the active span
+at subscription time determines the parent. If you build a request object in one handler and
+subscribe in another context, the trace may be disconnected:
 
 ```java
-// Context captured HERE (when get() is called):
+// Request object created here, but no span work yet:
 HttpRequest<Buffer> req = tracedClient.get(8080, "host", "/api");
 
-// NOT here (when rxSend subscribes):
+// CLIENT span + traceparent captured HERE (when rxSend subscribes):
 req.rxSend().subscribe(...);
 ```
 
-Make sure the request is created inside the handler where the span is active — not stored and reused
-across different request contexts.
+Make sure `rxSend()` is called inside the handler where the parent span is active — not deferred
+to a different request context.
 
 ## Vert.x 3: Database Tracing
 
