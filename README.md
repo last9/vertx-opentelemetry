@@ -134,7 +134,7 @@ Logback OpenTelemetry appender installed for log export
 - **Distributed tracing** via W3C `traceparent` header propagation
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
 - **Kafka consumer tracing** (Vert.x 3 + 4) — `KafkaTracing.tracedBatchHandler()` creates a CONSUMER span per batch so `trace_id` appears in logs inside the handler
-- **Database tracing** (Vert.x 3) — `DbTracing` wraps any database call (MySQL, Aerospike, etc.) with a CLIENT span using OTel DB semantic conventions
+- **Database tracing** (Vert.x 3) — auto-instrumented wrappers for SQL (`TracedSQLClient`), Redis (`TracedRedisClient`), and Aerospike (`TracedAerospikeClient`), plus generic `DbTracing` for any other database
 - **Auto-propagating WebClient** (Vert.x 3) — `TracedWebClient` auto-injects `traceparent` on every outgoing request — no per-call wrapping needed
 - **Log-to-trace correlation** — every log line includes `trace_id` and `span_id`, so you can jump from a log line to its trace in your observability platform
 - **Log export** — logs sent to your OTLP endpoint alongside traces, with trace context automatically attached
@@ -234,27 +234,80 @@ Vert.x 4 handles outgoing HTTP propagation automatically for any client created 
 
 ## Vert.x 3: Database Tracing
 
-Vert.x 3 has no SPI for database clients, so MySQL, Aerospike, and other DB calls produce no
-spans by default. `DbTracing` wraps any database operation with a CLIENT span:
+Vert.x 3 has no SPI for database clients, so MySQL, PostgreSQL, Redis, Aerospike, and other DB
+calls produce no spans by default. Use the auto-instrumented wrapper clients for zero-code tracing,
+or `DbTracing` for manual wrapping.
+
+### Option 1: Auto-instrumented wrappers (recommended)
+
+Swap your client creation line and every operation is traced automatically:
+
+**SQL (MySQL / PostgreSQL):**
+
+```java
+import io.last9.tracing.otel.v3.TracedSQLClient;
+
+// Instead of: SQLClient client = JDBCClient.createShared(vertx, config);
+SQLClient client = TracedSQLClient.wrap(
+        JDBCClient.createShared(vertx, config), "mysql", "orders_db");
+
+// Every query automatically gets a CLIENT span — no manual wrapping:
+client.rxQueryWithParams("SELECT * FROM orders WHERE id = ?", params)
+    .subscribe(resultSet -> { ... });
+
+// Connections are also auto-traced:
+client.rxGetConnection()
+    .flatMap(conn -> conn.rxQuery("SELECT 1").doFinally(conn::close))
+    .subscribe(...);
+```
+
+**Redis:**
+
+```java
+import io.last9.tracing.otel.v3.TracedRedisClient;
+
+// Instead of: RedisAPI redis = RedisAPI.api(connection);
+RedisAPI redis = TracedRedisClient.wrap(RedisAPI.api(connection), "0");
+
+// Common commands (GET, SET, HGETALL, DEL, LPUSH, etc.) are auto-traced:
+redis.rxGet("session:abc").subscribe(response -> { ... });
+redis.rxHgetall("user:42").subscribe(response -> { ... });
+```
+
+**Aerospike:**
+
+```java
+import io.last9.tracing.otel.v3.TracedAerospikeClient;
+
+// Instead of: IAerospikeClient client = new AerospikeClient("localhost", 3000);
+IAerospikeClient client = TracedAerospikeClient.wrap(
+        new AerospikeClient("localhost", 3000), "my-namespace");
+
+// Every data-plane call (get, put, delete, exists, operate, query, scanAll)
+// automatically gets a CLIENT span:
+Record record = client.get(null, new Key("my-namespace", "users", "user:123"));
+client.put(null, key, new Bin("name", "Alice"));
+```
+
+### Option 2: Manual wrapping with DbTracing
+
+For databases without an auto-instrumented wrapper, or for fine-grained control:
 
 ```java
 import io.last9.tracing.otel.v3.DbTracing;
 
-// Create once per database:
 DbTracing db = DbTracing.create("mysql", "orders_db");
 
-// Wrap RxJava operations — span is created and ended automatically:
 db.traceSingle("SELECT * FROM orders WHERE id = ?", () ->
         sqlClient.rxQueryWithParams(sql, params))
     .subscribe(resultSet -> { ... });
 
-// For completable operations (INSERT, UPDATE, DELETE):
 db.traceCompletable("DELETE FROM cache WHERE expired = true", () ->
         sqlClient.rxUpdate(sql).ignoreElement())
     .subscribe();
 ```
 
-For synchronous clients like the Aerospike Java client:
+For synchronous clients:
 
 ```java
 DbTracing aerospike = DbTracing.create("aerospike", "my-namespace");
