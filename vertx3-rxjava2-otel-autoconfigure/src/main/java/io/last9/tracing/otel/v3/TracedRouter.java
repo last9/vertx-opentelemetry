@@ -112,8 +112,15 @@ public final class TracedRouter {
             String method = request.method().name();
             String path = request.path();
 
-            // 1. Extract parent context from incoming W3C traceparent header
-            Context parentContext = propagator.extract(Context.current(), request, HEADER_GETTER);
+            // 1. Extract parent context from incoming W3C traceparent header.
+            //    IMPORTANT: Use Context.root() — NOT Context.current() — as the base.
+            //    Vert.x 3 runs all handlers on a single event-loop thread. If any prior
+            //    request's scope leaked into the thread-local (or a handler forgot to close
+            //    a scope), Context.current() would still hold the previous request's span,
+            //    causing this new SERVER span to parent under the old one. Using root()
+            //    ensures each incoming HTTP request starts a fresh trace (unless the caller
+            //    sends a valid traceparent header, which extract() will honour).
+            Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
 
             // 2. Start a SERVER span
             String hostHeader = request.host();
