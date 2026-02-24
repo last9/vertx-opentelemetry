@@ -98,6 +98,10 @@ public class SpanNameUpdater {
                     captured.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, statusCode);
                     if (statusCode >= 500) {
                         captured.setStatus(StatusCode.ERROR);
+                        Throwable failure = ctx.failure();
+                        if (failure != null) {
+                            captured.recordException(failure);
+                        }
                     }
                 }
             });

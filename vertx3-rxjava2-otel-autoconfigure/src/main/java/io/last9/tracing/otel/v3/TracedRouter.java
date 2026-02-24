@@ -166,6 +166,10 @@ public final class TracedRouter {
                 span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, (long) statusCode);
                 if (statusCode >= 500) {
                     span.setStatus(StatusCode.ERROR);
+                    Throwable failure = ctx.failure();
+                    if (failure != null) {
+                        span.recordException(failure);
+                    }
                 }
             });
 
