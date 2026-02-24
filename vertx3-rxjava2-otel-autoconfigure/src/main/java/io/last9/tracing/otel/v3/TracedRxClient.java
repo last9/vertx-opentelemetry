@@ -74,12 +74,26 @@ public final class TracedRxClient {
 
     /**
      * Wraps a client with automatic RxJava2 tracing using {@link GlobalOpenTelemetry}.
+     * The {@code db.name} attribute is omitted from spans.
+     *
+     * @param <T>      the client interface type
+     * @param client   the client instance to wrap
+     * @param iface    the interface class to proxy
+     * @param dbSystem the database system identifier (e.g., "mysql", "aerospike")
+     * @return a traced proxy implementing the given interface
+     */
+    public static <T> T wrap(T client, Class<T> iface, String dbSystem) {
+        return wrap(client, iface, dbSystem, null, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wraps a client with automatic RxJava2 tracing using {@link GlobalOpenTelemetry}.
      *
      * @param <T>          the client interface type
      * @param client       the client instance to wrap
      * @param iface        the interface class to proxy
      * @param dbSystem     the database system identifier (e.g., "mysql", "aerospike")
-     * @param dbNamespace  the database or namespace name
+     * @param dbNamespace  the database or namespace name; may be {@code null} to omit
      * @return a traced proxy implementing the given interface
      */
     public static <T> T wrap(T client, Class<T> iface, String dbSystem, String dbNamespace) {

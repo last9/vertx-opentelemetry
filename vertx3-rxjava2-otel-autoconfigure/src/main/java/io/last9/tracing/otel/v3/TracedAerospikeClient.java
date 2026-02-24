@@ -53,9 +53,20 @@ public final class TracedAerospikeClient {
 
     /**
      * Wraps an {@link IAerospikeClient} with tracing using {@link GlobalOpenTelemetry}.
+     * The {@code db.name} attribute is omitted from spans.
+     *
+     * @param client the Aerospike client to wrap
+     * @return a traced proxy implementing {@code IAerospikeClient}
+     */
+    public static IAerospikeClient wrap(IAerospikeClient client) {
+        return wrap(client, null, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wraps an {@link IAerospikeClient} with tracing using {@link GlobalOpenTelemetry}.
      *
      * @param client      the Aerospike client to wrap
-     * @param dbNamespace the Aerospike namespace (used as {@code db.name})
+     * @param dbNamespace the Aerospike namespace (used as {@code db.name}); may be {@code null}
      * @return a traced proxy implementing {@code IAerospikeClient}
      */
     public static IAerospikeClient wrap(IAerospikeClient client, String dbNamespace) {
