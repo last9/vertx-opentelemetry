@@ -23,6 +23,8 @@ mvn install:install-file -Dfile=vertx3-rxjava2-otel-autoconfigure-1.3.0.jar \
   -DgroupId=io.last9 -DartifactId=vertx3-rxjava2-otel-autoconfigure -Dversion=1.3.0 -Dpackaging=jar
 ```
 
+> **Self-contained JAR**: Each module JAR bundles `OtelSdkSetup` and `MdcTraceTurboFilter` from the internal `vertx-otel-core` module. You do **not** need a separate `vertx-otel-core` dependency — the single downloaded JAR is all you need.
+
 Then add to your `pom.xml`:
 
 ```xml
@@ -321,6 +323,9 @@ If you use `OtelLauncher` as your main class, this is handled automatically. If 
 main class, you must call it yourself:
 
 ```java
+import io.last9.tracing.otel.OtelSdkSetup;
+import io.last9.tracing.otel.v3.RxJava2ContextPropagation;
+
 // In your custom launcher or main method, BEFORE deploying verticles:
 OtelSdkSetup.initialize();
 RxJava2ContextPropagation.install();  // <-- don't forget this
