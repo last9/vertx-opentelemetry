@@ -3,11 +3,15 @@ package io.last9.tracing.otel.v3;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.data.SpanData;
+import io.reactivex.Single;
 import io.vertx.core.Handler;
 import io.vertx.kafka.client.consumer.KafkaConsumerRecords;
 import io.vertx.kafka.client.consumer.impl.KafkaConsumerRecordsImpl;
+import io.vertx.kafka.client.producer.RecordMetadata;
+import io.vertx.reactivex.kafka.client.producer.KafkaProducerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
@@ -125,6 +129,113 @@ class KafkaTracingTest {
         assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
         SpanData span = spanExporter.getFinishedSpanItems().get(0);
         assertThat(span.getEvents()).anyMatch(e -> e.getName().equals("exception"));
+    }
+
+    @Test
+    void batchHandlerSetsErrorStatusOnException() {
+        Handler<KafkaConsumerRecords<String, String>> traced = KafkaTracing.tracedBatchHandler(
+                "orders",
+                records -> { throw new RuntimeException("downstream failure"); },
+                otel.getOpenTelemetry()
+        );
+
+        assertThatThrownBy(() -> traced.handle(emptyBatch()));
+
+        SpanData span = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(span.getStatus().getDescription()).isEqualTo("downstream failure");
+        assertThat(span.getEvents()).anyMatch(e -> e.getName().equals("exception"));
+    }
+
+    // ---- Producer tests ----
+
+    @Test
+    void producerSendCreatesProducerSpan() {
+        KafkaProducerRecord<String, String> record =
+                KafkaProducerRecord.create("orders", "key-1", "value-1");
+        RecordMetadata metadata = new RecordMetadata()
+                .setTopic("orders").setPartition(2).setOffset(42L);
+
+        Single<RecordMetadata> send = Single.just(metadata);
+
+        KafkaTracing.tracedSend(record, send, otel.getOpenTelemetry()).blockingGet();
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+
+        SpanData span = spans.get(0);
+        assertThat(span.getName()).isEqualTo("orders publish");
+        assertThat(span.getKind()).isEqualTo(SpanKind.PRODUCER);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.system")))
+                .isEqualTo("kafka");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.destination.name")))
+                .isEqualTo("orders");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.operation")))
+                .isEqualTo("publish");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.kafka.message.key")))
+                .isEqualTo("key-1");
+        // partition and offset set after successful send
+        assertThat(span.getAttributes().get(AttributeKey.longKey("messaging.kafka.destination.partition")))
+                .isEqualTo(2L);
+        assertThat(span.getAttributes().get(AttributeKey.longKey("messaging.kafka.message.offset")))
+                .isEqualTo(42L);
+    }
+
+    @Test
+    void producerSendErrorRecordsExceptionAndSetsErrorStatus() {
+        KafkaProducerRecord<String, String> record =
+                KafkaProducerRecord.create("orders", "key-1", "value-1");
+        RuntimeException sendError = new RuntimeException("broker unavailable");
+
+        Single<RecordMetadata> failingSend = Single.error(sendError);
+
+        assertThatThrownBy(() ->
+                KafkaTracing.tracedSend(record, failingSend, otel.getOpenTelemetry()).blockingGet()
+        ).isInstanceOf(RuntimeException.class).hasMessage("broker unavailable");
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+
+        SpanData span = spans.get(0);
+        assertThat(span.getKind()).isEqualTo(SpanKind.PRODUCER);
+        assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(span.getStatus().getDescription()).isEqualTo("broker unavailable");
+        assertThat(span.getEvents()).anyMatch(e -> e.getName().equals("exception"));
+    }
+
+    @Test
+    void producerSendSpanAlwaysEndsOnDisposal() {
+        KafkaProducerRecord<String, String> record =
+                KafkaProducerRecord.create("orders", "key-1", "value-1");
+        // A Single that never terminates — simulates a hung broker
+        Single<RecordMetadata> neverSend = Single.never();
+
+        var disposable = KafkaTracing.tracedSend(record, neverSend, otel.getOpenTelemetry())
+                .subscribe();
+
+        // No spans yet — send is still in flight
+        assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
+
+        // Cancel (dispose) before the send completes
+        disposable.dispose();
+
+        // doFinally must have fired — span is ended and exported
+        assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
+        assertThat(spanExporter.getFinishedSpanItems().get(0).getKind())
+                .isEqualTo(SpanKind.PRODUCER);
+    }
+
+    @Test
+    void producerSendTombstoneSetsMsgTombstoneAttribute() {
+        KafkaProducerRecord<String, String> record =
+                KafkaProducerRecord.create("orders", "key-1", null);  // null value = tombstone
+        RecordMetadata metadata = new RecordMetadata().setTopic("orders").setPartition(0).setOffset(1L);
+
+        KafkaTracing.tracedSend(record, Single.just(metadata), otel.getOpenTelemetry()).blockingGet();
+
+        SpanData span = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(span.getAttributes().get(AttributeKey.booleanKey("messaging.kafka.message.tombstone")))
+                .isTrue();
     }
 
     // ---- Helpers ----
