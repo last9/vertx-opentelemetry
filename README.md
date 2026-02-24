@@ -284,6 +284,26 @@ Vert.x 4 handles outgoing HTTP propagation automatically for any client created 
 
 ## Troubleshooting
 
+### NoClassDefFoundError: okhttp3/Interceptor
+
+```
+Exception in thread "main" java.lang.NoClassDefFoundError: okhttp3/Interceptor
+    at io.opentelemetry.exporter.sender.okhttp.internal.OkHttpGrpcSenderProvider.createSender
+```
+
+**Cause**: The OTel OTLP exporter defaults to gRPC protocol, which requires OkHttp3 at runtime. OkHttp3 is bundled in the OTel Java agent but is not bundled in this library — it lives in a different Maven groupId (`com.squareup.okhttp3`) and was not included in the fat JAR.
+
+**Fix**: Upgrade to `v1.3.0-beta.4` or later. The library now bundles `opentelemetry-exporter-sender-jdk` (uses Java 11's built-in `HttpClient`) and defaults `OTEL_EXPORTER_OTLP_PROTOCOL` to `http/protobuf`, which requires no extra dependencies. All standard OTLP backends (Last9, Grafana, Datadog, Jaeger) support HTTP/protobuf.
+
+If you explicitly need gRPC (`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`), add OkHttp3 to your own application's classpath:
+```xml
+<dependency>
+    <groupId>com.squareup.okhttp3</groupId>
+    <artifactId>okhttp</artifactId>
+    <version>4.12.0</version>
+</dependency>
+```
+
 ### ClassNotFoundException / NoClassDefFoundError: OtelSdkSetup
 
 ```
@@ -293,9 +313,9 @@ Caused by: java.lang.ClassNotFoundException: io.last9.tracing.otel.OtelSdkSetup
 
 **Cause**: You are using a JAR built before version 1.3.0-beta.3. Earlier JARs were thin — `OtelSdkSetup` and `MdcTraceTurboFilter` lived in a separate `vertx-otel-core` artifact that was pulled in as a Maven transitive dependency. When installed manually via `mvn install:install-file -DgeneratePom=true`, the generated POM has no dependencies, so `vertx-otel-core` is never resolved and the class is missing at runtime.
 
-> **Note**: `v1.3.0-beta.2` also has this issue. Although it was intended to be the first bundled release, its published JAR is thin due to a CI race condition (the release was already published before the bundling commit was tagged). Use `v1.3.0-beta.3` or later.
+> **Note**: `v1.3.0-beta.2` also has this issue. Although it was intended to be the first bundled release, its published JAR is thin due to a CI race condition (the release was already published before the bundling commit was tagged). Use `v1.3.0-beta.4` or later.
 
-**Fix**: Download `v1.3.0-beta.3` or later from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases). Since 1.3.0-beta.3 the JAR is fully self-contained — `vertx-otel-core`, the full OpenTelemetry SDK, and all instrumentation are bundled inside the single JAR. No separate `vertx-otel-core` dependency is needed.
+**Fix**: Download `v1.3.0-beta.4` or later from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases). Since 1.3.0-beta.3 the JAR is fully self-contained — `vertx-otel-core`, the full OpenTelemetry SDK, and all instrumentation are bundled inside the single JAR. No separate `vertx-otel-core` dependency is needed.
 
 You can verify a JAR is self-contained before installing it:
 
@@ -732,7 +752,7 @@ run, and download the `jars-<sha>` artifact.
 
 **Option 2: Beta releases** — tagged pre-releases appear on the
 [Releases](https://github.com/last9/vertx-opentelemetry/releases) page marked as "Pre-release"
-with downloadable JARs. The latest pre-release is **`v1.3.0-beta.3`** — use this version; `v1.3.0-beta.2` has a known issue where the published JAR is thin (OTel SDK not bundled).
+with downloadable JARs. The latest pre-release is **`v1.3.0-beta.4`** — use this version. Known issues in earlier betas: `v1.3.0-beta.2` has a thin JAR (OTel SDK not bundled); `v1.3.0-beta.3` triggers `NoClassDefFoundError: okhttp3/Interceptor` at startup.
 
 ## Environment Variables
 
