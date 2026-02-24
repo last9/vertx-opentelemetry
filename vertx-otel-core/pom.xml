@@ -69,6 +69,24 @@
             <version>${opentelemetry-instrumentation.version}-alpha</version>
         </dependency>
 
+        <!-- AWS resource detectors: EC2, ECS, EKS, Lambda, Elastic Beanstalk.
+             Registered via SPI — autoconfigure picks them up automatically.
+             Makes short HTTP calls to IMDS at startup; silently skips if not on AWS. -->
+        <dependency>
+            <groupId>io.opentelemetry.contrib</groupId>
+            <artifactId>opentelemetry-aws-resources</artifactId>
+            <version>${opentelemetry-contrib.version}</version>
+        </dependency>
+
+        <!-- GCP resource detectors: GCE, GKE, Cloud Run, App Engine.
+             Registered via SPI — autoconfigure picks them up automatically.
+             Makes short HTTP calls to GCP metadata server at startup; silently skips if not on GCP. -->
+        <dependency>
+            <groupId>io.opentelemetry.contrib</groupId>
+            <artifactId>opentelemetry-gcp-resources</artifactId>
+            <version>${opentelemetry-contrib.version}</version>
+        </dependency>
+
         <!-- Logging -->
         <dependency>
             <groupId>org.slf4j</groupId>
