@@ -208,6 +208,19 @@ public final class KafkaTracing {
             KafkaProducer<K, V> producer,
             KafkaProducerRecord<K, V> record,
             OpenTelemetry openTelemetry) {
+        return tracedSend(record, producer.rxSend(record), openTelemetry);
+    }
+
+    /**
+     * Package-private overload that accepts a pre-built {@code Single<RecordMetadata>}.
+     * Separates span lifecycle from the producer call, making the logic testable without
+     * a real Kafka broker.
+     */
+    @SuppressWarnings("unchecked")
+    static <K, V> Single<RecordMetadata> tracedSend(
+            KafkaProducerRecord<K, V> record,
+            Single<RecordMetadata> sendSingle,
+            OpenTelemetry openTelemetry) {
         Tracer tracer = openTelemetry.getTracer(TRACER_NAME);
         Span span = tracer.spanBuilder(record.topic() + " publish")
                 .setSpanKind(SpanKind.PRODUCER)
@@ -222,36 +235,41 @@ public final class KafkaTracing {
                     String.valueOf(record.key()));
         }
 
-        // Check for tombstone (null value)
         if (record.value() == null) {
             span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_TOMBSTONE, true);
         }
 
-        // If a specific partition was requested, set it before send
         if (record.partition() != null) {
             span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
                     (long) record.partition());
         }
 
-        // Inject trace context into Kafka record headers for consumer correlation
+        // Inject trace context into record headers so consumers can link their spans
         Context spanContext = Context.current().with(span);
         openTelemetry.getPropagators().getTextMapPropagator()
                 .inject(spanContext, record, RECORD_SETTER);
 
         try (Scope ignored = span.makeCurrent()) {
-            return producer.rxSend(record)
+            return sendSingle
                     .doOnSuccess(metadata -> {
+                        // Set partition/offset attributes once confirmed by the broker
                         span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
                                 (long) metadata.getPartition());
                         span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_OFFSET,
                                 metadata.getOffset());
-                        span.end();
                     })
                     .doOnError(err -> {
                         span.recordException(err);
                         span.setStatus(StatusCode.ERROR, err.getMessage());
-                        span.end();
-                    });
+                    })
+                    // doFinally guarantees span.end() on success, error, AND disposal/cancellation
+                    .doFinally(span::end);
+        } catch (Throwable t) {
+            // sendSingle construction itself threw (e.g. closed producer, serialization error)
+            span.recordException(t);
+            span.setStatus(StatusCode.ERROR, t.getMessage());
+            span.end();
+            throw t;
         }
     }
 }

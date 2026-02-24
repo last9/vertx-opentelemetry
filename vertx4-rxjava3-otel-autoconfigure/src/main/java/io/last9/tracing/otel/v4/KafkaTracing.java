@@ -4,6 +4,7 @@ import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.semconv.SemanticAttributes;
@@ -97,6 +98,7 @@ public final class KafkaTracing {
                 delegate.handle(records);
             } catch (Throwable t) {
                 span.recordException(t);
+                span.setStatus(StatusCode.ERROR, t.getMessage());
                 throw t;
             } finally {
                 span.end();
