@@ -410,6 +410,9 @@ import io.last9.tracing.otel.v3.TracedSQLClient;
 SQLClient client = TracedSQLClient.wrap(
         JDBCClient.createShared(vertx, config), "mysql", "orders_db");
 
+// db name is optional — omit if not known:
+SQLClient client = TracedSQLClient.wrap(JDBCClient.createShared(vertx, config), "mysql");
+
 // Every query automatically gets a CLIENT span — no manual wrapping:
 client.rxQueryWithParams("SELECT * FROM orders WHERE id = ?", params)
     .subscribe(resultSet -> { ... });
@@ -428,6 +431,9 @@ import io.last9.tracing.otel.v3.TracedRedisClient;
 // Instead of: RedisAPI redis = RedisAPI.api(connection);
 RedisAPI redis = TracedRedisClient.wrap(RedisAPI.api(connection), "0");
 
+// db namespace is optional:
+RedisAPI redis = TracedRedisClient.wrap(RedisAPI.api(connection));
+
 // Common commands (GET, SET, HGETALL, DEL, LPUSH, etc.) are auto-traced:
 redis.rxGet("session:abc").subscribe(response -> { ... });
 redis.rxHgetall("user:42").subscribe(response -> { ... });
@@ -441,6 +447,9 @@ import io.last9.tracing.otel.v3.TracedAerospikeClient;
 // Instead of: IAerospikeClient client = new AerospikeClient("localhost", 3000);
 IAerospikeClient client = TracedAerospikeClient.wrap(
         new AerospikeClient("localhost", 3000), "my-namespace");
+
+// namespace is optional:
+IAerospikeClient client = TracedAerospikeClient.wrap(new AerospikeClient("localhost", 3000));
 
 // Every data-plane call (get, put, delete, exists, operate, query, scanAll)
 // automatically gets a CLIENT span:
@@ -493,6 +502,9 @@ import io.last9.tracing.otel.v3.TracedRxClient;
 // Wrap a MySQL client:
 MysqlClient traced = TracedRxClient.wrap(
         mysqlClient, MysqlClient.class, "mysql", "orders_db");
+
+// db name is optional:
+MysqlClient traced = TracedRxClient.wrap(mysqlClient, MysqlClient.class, "mysql");
 
 // Wrap an Aerospike client:
 AerospikeClient traced = TracedRxClient.wrap(

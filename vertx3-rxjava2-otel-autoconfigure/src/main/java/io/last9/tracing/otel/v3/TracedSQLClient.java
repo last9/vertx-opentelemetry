@@ -53,10 +53,22 @@ public class TracedSQLClient extends SQLClient {
 
     /**
      * Wraps an existing {@link SQLClient} with tracing using {@link GlobalOpenTelemetry}.
+     * The {@code db.name} attribute is omitted from spans.
      *
      * @param client    the existing SQLClient to wrap
      * @param dbSystem  the database system identifier (e.g., "mysql", "postgresql")
-     * @param dbName    the database name (e.g., "orders_db")
+     * @return a SQLClient that auto-instruments all queries with CLIENT spans
+     */
+    public static TracedSQLClient wrap(SQLClient client, String dbSystem) {
+        return wrap(client, dbSystem, null, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wraps an existing {@link SQLClient} with tracing using {@link GlobalOpenTelemetry}.
+     *
+     * @param client    the existing SQLClient to wrap
+     * @param dbSystem  the database system identifier (e.g., "mysql", "postgresql")
+     * @param dbName    the database name (e.g., "orders_db"); may be {@code null} to omit
      * @return a SQLClient that auto-instruments all queries with CLIENT spans
      */
     public static TracedSQLClient wrap(SQLClient client, String dbSystem, String dbName) {
