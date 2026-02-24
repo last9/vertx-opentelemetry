@@ -671,17 +671,28 @@ Each batch produces a CONSUMER span named `{topic} process` (per OTel convention
 Any traced client called inside the handler (e.g., `TracedAerospikeClient`, `TracedWebClient`,
 `DbTracing`) automatically parents under the CONSUMER span.
 
-#### Consumer: KafkaTracing.tracedBatchHandler (low-level)
+#### Consumer: KafkaTracing.setupConsumer (existing consumer)
 
-For more control over consumer creation and configuration, use `KafkaTracing.tracedBatchHandler()`
-directly:
+If you already have a `KafkaConsumer` instance (e.g., you need custom partition assignment or
+offset control), `KafkaTracing.setupConsumer()` wires all four required steps in one call:
 
 ```java
 import io.last9.tracing.otel.v3.KafkaTracing;
 
 KafkaConsumer<String, String> consumer = KafkaConsumer.create(vertx, config);
+
+// Wires batchHandler, exceptionHandler, no-op handler, and subscribe — all in one call
+KafkaTracing.setupConsumer(consumer, "orders", "my-consumer-group", records -> {
+    logger.info("Processing {} records", records.size());
+});
+```
+
+This is equivalent to the following manual wiring:
+
+```java
 consumer.getDelegate().batchHandler(KafkaTracing.tracedBatchHandler(
         topicName, "my-consumer-group", this::handleBatch, GlobalOpenTelemetry.get()));
+consumer.exceptionHandler(KafkaTracing.tracedExceptionHandler(topicName, GlobalOpenTelemetry.get()));
 consumer.handler(record -> {});  // required to start polling
 consumer.subscribe(topicName);
 ```
