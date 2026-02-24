@@ -1,6 +1,8 @@
 # Compiled class files
 *.class
 
+customer/
+
 # Log files
 *.log
 
