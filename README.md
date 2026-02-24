@@ -137,7 +137,7 @@ Logback OpenTelemetry appender installed for log export
 - **Distributed tracing** via W3C `traceparent` header propagation
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
 - **Kafka producer + consumer tracing** (Vert.x 3 + 4) — `TracedKafkaProducer` creates PRODUCER spans with `traceparent` header propagation; `TracedKafkaConsumer` creates CONSUMER spans per batch with one-line setup
-- **Database tracing** (Vert.x 3) — auto-instrumented wrappers for SQL (`TracedSQLClient`), Redis (`TracedRedisClient`), and Aerospike (`TracedAerospikeClient`), plus generic `DbTracing` for any other database
+- **Database tracing** (Vert.x 3) — auto-instrumented wrappers for reactive MySQL (`TracedMySQLClient`), legacy SQL (`TracedSQLClient`), Redis (`TracedRedisClient`), and Aerospike (`TracedAerospikeClient`), plus generic `DbTracing` for any other database
 - **Generic RxJava2 client wrapping** (Vert.x 3) — `TracedRxClient.wrap()` adds CLIENT spans to any RxJava2 interface via dynamic proxy — works with any third-party MySQL/Aerospike/custom data-access client
 - **Auto-tracing WebClient** (Vert.x 3) — `TracedWebClient` creates CLIENT spans and injects `traceparent` on every outgoing request — no per-call wrapping needed
 - **Worker thread context propagation** (Vert.x 3) — `TracedVertx.rxExecuteBlocking()` carries OTel context from event loop to worker threads so blocking calls produce connected spans
@@ -446,7 +446,7 @@ or `DbTracing` for manual wrapping.
 
 Swap your client creation line and every operation is traced automatically:
 
-**SQL (MySQL / PostgreSQL):**
+**SQL (legacy `SQLClient` — MySQL / PostgreSQL):**
 
 ```java
 import io.last9.tracing.otel.v3.TracedSQLClient;
@@ -468,10 +468,41 @@ client.rxGetConnection()
     .subscribe(...);
 ```
 
-**Redis:**
+**MySQL (reactive client — `vertx-mysql-client`):**
 
 ```java
-import io.last9.tracing.otel.v3.TracedRedisClient;
+import io.last9.tracing.otel.v3.TracedMySQLClient;
+import io.vertx.reactivex.mysqlclient.MySQLPool;
+import io.vertx.reactivex.sqlclient.Tuple;
+
+// Instead of: MySQLPool pool = MySQLPool.pool(vertx, connectOptions, poolOptions);
+TracedMySQLClient mysql = TracedMySQLClient.wrap(
+        MySQLPool.pool(vertx, connectOptions, poolOptions), "orders_db");
+
+// db name is optional:
+TracedMySQLClient mysql = TracedMySQLClient.wrap(
+        MySQLPool.pool(vertx, connectOptions, poolOptions));
+
+// Every query automatically gets a CLIENT span:
+mysql.query("SELECT * FROM orders")
+    .subscribe(rows -> { ... });
+
+// Parameterised prepared query:
+mysql.preparedQuery("SELECT * FROM orders WHERE id = ?", Tuple.of(orderId))
+    .subscribe(rows -> { ... });
+
+// Use unwrap() for pool-level operations not covered above (transactions, etc.):
+mysql.unwrap().withTransaction(conn -> ...);
+```
+
+> **Note**: `TracedMySQLClient` wraps the newer reactive `MySQLPool` API (`vertx-mysql-client`).
+> For the legacy async MySQL client (`vertx-mysql-postgresql-client`) that implements
+> `io.vertx.ext.sql.SQLClient`, use `TracedSQLClient` instead (see below).
+
+**SQL (legacy `SQLClient` — MySQL / PostgreSQL):**
+
+```java
+import io.last9.tracing.otel.v3.TracedSQLClient;
 
 // Instead of: RedisAPI redis = RedisAPI.api(connection);
 RedisAPI redis = TracedRedisClient.wrap(RedisAPI.api(connection), "0");
