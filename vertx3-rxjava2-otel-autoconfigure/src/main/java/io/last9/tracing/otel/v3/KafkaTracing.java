@@ -160,6 +160,49 @@ public final class KafkaTracing {
         };
     }
 
+    // ---- Consumer exception handler ----
+
+    /**
+     * Returns a Vert.x {@code Handler<Throwable>} suitable for use with
+     * {@link io.vertx.reactivex.kafka.client.consumer.KafkaConsumer#exceptionHandler}.
+     *
+     * <p>Infrastructure-level consumer errors (broker unreachable, deserialization failures,
+     * authentication errors) are delivered via the exception handler, NOT via the batch handler.
+     * Without this, those errors produce no span and no log correlation.
+     *
+     * <p>For each error, this handler creates a short-lived CONSUMER span with:
+     * <ul>
+     *   <li>{@code messaging.system} = "kafka"</li>
+     *   <li>{@code messaging.destination.name} = topic</li>
+     *   <li>span status = ERROR</li>
+     *   <li>exception event with the full stack trace</li>
+     * </ul>
+     *
+     * @param topic         the topic the consumer is subscribed to
+     * @param openTelemetry the OpenTelemetry instance to use
+     * @return a {@code Handler<Throwable>} that creates an ERROR span for each consumer error
+     */
+    public static Handler<Throwable> tracedExceptionHandler(
+            String topic,
+            OpenTelemetry openTelemetry) {
+        Tracer tracer = openTelemetry.getTracer(TRACER_NAME);
+        return err -> {
+            Span span = tracer.spanBuilder(topic + " error")
+                    .setSpanKind(SpanKind.CONSUMER)
+                    .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
+                    .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, topic)
+                    .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
+                            SemanticAttributes.MessagingOperationValues.PROCESS)
+                    .startSpan();
+            try (Scope ignored = span.makeCurrent()) {
+                span.recordException(err);
+                span.setStatus(StatusCode.ERROR, err.getMessage());
+            } finally {
+                span.end();
+            }
+        };
+    }
+
     // ---- Producer tracing ----
 
     /**
