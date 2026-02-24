@@ -194,11 +194,16 @@
                                 <shadedArtifactAttached>false</shadedArtifactAttached>
                                 <!-- Don't generate a dependency-reduced POM beside the JAR -->
                                 <createDependencyReducedPom>false</createDependencyReducedPom>
-                                <!-- Only bundle vertx-otel-core; all other deps stay as
-                                     transitive / provided so there are no classpath conflicts -->
+                                <!-- Bundle vertx-otel-core plus all OTel SDK, exporter,
+                                     instrumentation, and semconv artifacts so the JAR is
+                                     self-contained. Vert.x, RxJava, Logback, and SLF4J are
+                                     kept as provided — the user's app always supplies those. -->
                                 <artifactSet>
                                     <includes>
                                         <include>io.last9:vertx-otel-core</include>
+                                        <include>io.opentelemetry:*</include>
+                                        <include>io.opentelemetry.semconv:*</include>
+                                        <include>io.opentelemetry.instrumentation:*</include>
                                     </includes>
                                 </artifactSet>
                             </configuration>
