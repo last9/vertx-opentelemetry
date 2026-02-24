@@ -113,6 +113,24 @@ class TracedRedisClientTest {
     }
 
     @Test
+    void wrapWithoutNamespaceOmitsDbNameAttribute() {
+        RedisAPI stub = createStubRedisAPI(null);
+        io.vertx.reactivex.redis.client.RedisAPI traced = TracedRedisClient.wrap(
+                io.vertx.reactivex.redis.client.RedisAPI.newInstance(stub),
+                otel.getOpenTelemetry());
+
+        traced.rxGet("session:abc").blockingGet();
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+
+        SpanData span = spans.get(0);
+        assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.system"))).isEqualTo("redis");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.name"))).isNull();
+    }
+
+    @Test
     void errorRecordedOnSpan() {
         io.vertx.reactivex.redis.client.RedisAPI traced =
                 createTraced(new RuntimeException("WRONGTYPE"));
