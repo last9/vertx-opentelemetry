@@ -14,6 +14,7 @@ import io.reactivex.Single;
 import io.vertx.core.Handler;
 import io.vertx.kafka.client.consumer.KafkaConsumerRecords;
 import io.vertx.kafka.client.producer.RecordMetadata;
+import io.vertx.reactivex.kafka.client.consumer.KafkaConsumer;
 import io.vertx.reactivex.kafka.client.producer.KafkaProducer;
 import io.vertx.reactivex.kafka.client.producer.KafkaProducerRecord;
 
@@ -158,6 +159,84 @@ public final class KafkaTracing {
                 span.end();
             }
         };
+    }
+
+    // ---- Consumer setup convenience methods ----
+
+    /**
+     * Wires a traced Kafka consumer with a single call using {@link GlobalOpenTelemetry}.
+     *
+     * <p>Equivalent to the following boilerplate:
+     * <pre>{@code
+     * consumer.getDelegate().batchHandler(
+     *         KafkaTracing.tracedBatchHandler(topic, batchHandler));
+     * consumer.exceptionHandler(KafkaTracing.tracedExceptionHandler(topic));
+     * consumer.handler(record -> {});  // required to start polling
+     * consumer.subscribe(topic);
+     * }</pre>
+     *
+     * @param <K>          Kafka record key type
+     * @param <V>          Kafka record value type
+     * @param consumer     the Kafka consumer to configure
+     * @param topic        the topic to subscribe to
+     * @param batchHandler the handler invoked for each batch of records
+     */
+    public static <K, V> void setupConsumer(
+            KafkaConsumer<K, V> consumer,
+            String topic,
+            Handler<KafkaConsumerRecords<K, V>> batchHandler) {
+        setupConsumer(consumer, topic, null, batchHandler, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wires a traced Kafka consumer with consumer group in span attributes using
+     * {@link GlobalOpenTelemetry}.
+     *
+     * @param <K>           Kafka record key type
+     * @param <V>           Kafka record value type
+     * @param consumer      the Kafka consumer to configure
+     * @param topic         the topic to subscribe to
+     * @param consumerGroup the consumer group name (set as {@code messaging.kafka.consumer.group})
+     * @param batchHandler  the handler invoked for each batch of records
+     */
+    public static <K, V> void setupConsumer(
+            KafkaConsumer<K, V> consumer,
+            String topic,
+            String consumerGroup,
+            Handler<KafkaConsumerRecords<K, V>> batchHandler) {
+        setupConsumer(consumer, topic, consumerGroup, batchHandler, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wires a traced Kafka consumer with explicit {@link OpenTelemetry} instance.
+     *
+     * <p>Sets up all four required pieces in one call:
+     * <ol>
+     *   <li>A traced batch handler (CONSUMER span per poll)</li>
+     *   <li>A traced exception handler (ERROR span for infrastructure errors)</li>
+     *   <li>A no-op per-record handler (required by Vert.x to start polling)</li>
+     *   <li>Subscription to the topic</li>
+     * </ol>
+     *
+     * @param <K>            Kafka record key type
+     * @param <V>            Kafka record value type
+     * @param consumer       the Kafka consumer to configure
+     * @param topic          the topic to subscribe to
+     * @param consumerGroup  the consumer group name (nullable)
+     * @param batchHandler   the handler invoked for each batch of records
+     * @param openTelemetry  the OpenTelemetry instance to use
+     */
+    public static <K, V> void setupConsumer(
+            KafkaConsumer<K, V> consumer,
+            String topic,
+            String consumerGroup,
+            Handler<KafkaConsumerRecords<K, V>> batchHandler,
+            OpenTelemetry openTelemetry) {
+        consumer.getDelegate().batchHandler(
+                tracedBatchHandler(topic, consumerGroup, batchHandler, openTelemetry));
+        consumer.exceptionHandler(tracedExceptionHandler(topic, openTelemetry));
+        consumer.handler(record -> {});
+        consumer.subscribe(topic);
     }
 
     // ---- Consumer exception handler ----
