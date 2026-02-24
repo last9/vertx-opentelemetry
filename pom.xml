@@ -179,6 +179,32 @@
                         </execution>
                     </executions>
                 </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-shade-plugin</artifactId>
+                    <version>3.5.1</version>
+                    <executions>
+                        <execution>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>shade</goal>
+                            </goals>
+                            <configuration>
+                                <!-- Replace the main JAR in-place; no -shaded suffix -->
+                                <shadedArtifactAttached>false</shadedArtifactAttached>
+                                <!-- Don't generate a dependency-reduced POM beside the JAR -->
+                                <createDependencyReducedPom>false</createDependencyReducedPom>
+                                <!-- Only bundle vertx-otel-core; all other deps stay as
+                                     transitive / provided so there are no classpath conflicts -->
+                                <artifactSet>
+                                    <includes>
+                                        <include>io.last9:vertx-otel-core</include>
+                                    </includes>
+                                </artifactSet>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
             </plugins>
         </pluginManagement>
     </build>
