@@ -52,6 +52,13 @@
             <version>${opentelemetry-instrumentation.version}-alpha</version>
         </dependency>
 
+        <!-- JVM runtime metrics: memory, GC, threads, CPU, class-loading -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-runtime-telemetry-java8</artifactId>
+            <version>${opentelemetry-instrumentation.version}-alpha</version>
+        </dependency>
+
         <!-- Logging -->
         <dependency>
             <groupId>org.slf4j</groupId>

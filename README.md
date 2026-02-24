@@ -143,6 +143,9 @@ Logback OpenTelemetry appender installed for log export
 - **Worker thread context propagation** (Vert.x 3) — `TracedVertx.rxExecuteBlocking()` carries OTel context from event loop to worker threads so blocking calls produce connected spans
 - **Log-to-trace correlation** — every log line includes `trace_id` and `span_id`, so you can jump from a log line to its trace in your observability platform
 - **Log export** — logs sent to your OTLP endpoint alongside traces, with trace context automatically attached
+- **Process / host resource attributes** — `process.pid`, `process.runtime.name`, `process.runtime.version`, `host.name`, `os.type`, `os.description` attached to every span automatically (equivalent to the OTel Java agent)
+- **JVM metrics** — `jvm.memory.used`, `jvm.gc.duration`, `jvm.thread.count`, `jvm.cpu.time` and more, exported when `OTEL_METRICS_EXPORTER=otlp` is set
+- **Exception events on spans** — when a handler calls `ctx.fail(throwable)`, the exception is recorded as a span event with `exception.type`, `exception.message`, and `exception.stacktrace`
 
 ## Log-to-Trace Correlation
 
@@ -718,9 +721,17 @@ All standard [OpenTelemetry environment variables](https://opentelemetry.io/docs
 | `OTEL_SERVICE_NAME` | Service name in traces | `unknown-service` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL | `http://localhost:4318` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Auth headers (URL-encoded) | - |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` | HTTP client timeout per export (ms) | `10000` |
 | `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes | - |
 | `OTEL_LOGS_EXPORTER` | Log exporter (`otlp` / `none`) | `otlp` |
+| `OTEL_METRICS_EXPORTER` | Metrics exporter (`otlp` / `none`) | `none` |
 | `OTEL_TRACES_SAMPLER` | Sampling strategy | `parentbased_always_on` |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Metrics push interval (ms) | `60000` |
+| `OTEL_BSP_SCHEDULE_DELAY` | Span batch export interval (ms) | `5000` |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | Max spans per export request | `512` |
+
+> **Tip:** When exporting to a remote OTLP backend, set `OTEL_EXPORTER_OTLP_TIMEOUT=30000`
+> to avoid timeout errors on the first metrics export (which contains all JVM metric streams).
 
 ## Why Not the OTel Java Agent?
 

@@ -6,18 +6,51 @@ import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.Classes;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.Cpu;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.GarbageCollector;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.MemoryPools;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.Threads;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
+import io.opentelemetry.sdk.resources.ResourceBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.lang.management.ManagementFactory;
+import java.net.InetAddress;
 
 /**
  * Shared OpenTelemetry SDK setup used by both Vert.x 3 and Vert.x 4 launchers.
  *
  * <p>Auto-configures the OpenTelemetry SDK from {@code OTEL_*} environment variables,
  * ensures W3C trace context propagation is active (healing fat-jar shading issues),
- * and installs the Logback OTLP appender for log export.
+ * installs the Logback OTLP appender for log export, and registers JVM runtime metrics.
+ *
+ * <h2>Resource attributes added automatically</h2>
+ * <p>The following process/host/OS attributes are attached to every span as resource
+ * attributes (equivalent to what the OpenTelemetry Java agent provides):
+ * <ul>
+ *   <li>{@code process.pid} — JVM process ID</li>
+ *   <li>{@code process.runtime.name} — e.g. {@code OpenJDK Runtime Environment}</li>
+ *   <li>{@code process.runtime.version} — e.g. {@code 17.0.10+7}</li>
+ *   <li>{@code process.runtime.description} — VM name + version from JMX</li>
+ *   <li>{@code host.name} — local hostname</li>
+ *   <li>{@code os.type} — {@code linux}, {@code darwin}, {@code windows}, etc.</li>
+ *   <li>{@code os.description} — OS name + version</li>
+ * </ul>
+ *
+ * <h2>JVM metrics (requires {@code OTEL_METRICS_EXPORTER=otlp})</h2>
+ * <p>The following JVM metrics are registered and exported when a metrics exporter is
+ * configured (no-op otherwise):
+ * <ul>
+ *   <li>{@code jvm.memory.used}, {@code jvm.memory.committed}, {@code jvm.memory.max} — heap + non-heap</li>
+ *   <li>{@code jvm.gc.duration} — GC pause time histogram</li>
+ *   <li>{@code jvm.thread.count} — live thread count by state</li>
+ *   <li>{@code jvm.cpu.time}, {@code jvm.cpu.recent_utilization} — CPU usage</li>
+ *   <li>{@code jvm.class.count}, {@code jvm.class.loaded}, {@code jvm.class.unloaded}</li>
+ * </ul>
  */
 public final class OtelSdkSetup {
 
@@ -33,8 +66,10 @@ public final class OtelSdkSetup {
      * <p>This method:
      * <ol>
      *   <li>Builds and registers the SDK as the global instance</li>
+     *   <li>Attaches process/host/OS resource attributes to every span</li>
      *   <li>Verifies W3C trace context propagation is configured</li>
      *   <li>Installs the Logback OpenTelemetry appender for log export</li>
+     *   <li>Registers JVM runtime metric observers</li>
      * </ol>
      *
      * @return a fully configured OpenTelemetry instance
@@ -47,16 +82,16 @@ public final class OtelSdkSetup {
         log.info("Service: {}", serviceName);
         log.info("OTLP Endpoint: {}", otlpEndpoint);
 
-        // 1. Auto-configure OpenTelemetry SDK from OTEL_* environment variables.
-        //    Set telemetry.distro.name so that OTel Collector transform processors
-        //    (which map new semconv attributes like http.request.method to legacy
-        //    names like http.method) can match on this resource attribute.
+        // 1. Auto-configure SDK from OTEL_* env vars, merging process/host/OS resource
+        //    attributes so every span carries the same context the Java agent would provide.
+        Resource processResource = buildProcessResource();
+        log.info("Process resource attributes:");
+        processResource.getAttributes().forEach(
+                (key, value) -> log.info("  resource.{} = {}", key.getKey(), value));
+
         OpenTelemetrySdk sdk = AutoConfiguredOpenTelemetrySdk.builder()
                 .addResourceCustomizer((resource, config) ->
-                        resource.merge(Resource.builder()
-                                .put(AttributeKey.stringKey("telemetry.distro.name"),
-                                        "opentelemetry-java-instrumentation")
-                                .build()))
+                        resource.merge(processResource))
                 .setResultAsGlobal()
                 .build()
                 .getOpenTelemetrySdk();
@@ -72,8 +107,84 @@ public final class OtelSdkSetup {
         OpenTelemetryAppender.install(openTelemetry);
         log.info("Logback OpenTelemetry appender installed for log export");
 
+        // 4. Register JVM runtime metric observers.
+        //    These are no-ops when OTEL_METRICS_EXPORTER is unset (default "none").
+        //    Set OTEL_METRICS_EXPORTER=otlp to export to the configured OTLP endpoint.
+        registerJvmMetrics(openTelemetry);
+        log.info("JVM runtime metrics registered (memory, GC, threads, CPU, classes)");
+
         log.info("=== OpenTelemetry Ready ===");
         return openTelemetry;
+    }
+
+    /**
+     * Builds a Resource containing process, host, and OS attributes equivalent to those
+     * provided by the OpenTelemetry Java agent's built-in resource detectors.
+     */
+    private static Resource buildProcessResource() {
+        ResourceBuilder builder = Resource.builder()
+                // OTel Collector transform processors use this to map new semconv → legacy names
+                .put(AttributeKey.stringKey("telemetry.distro.name"),
+                        "opentelemetry-java-instrumentation");
+
+        // process.pid — Java 9+ ProcessHandle; always available on supported JVMs (17+)
+        try {
+            builder.put(AttributeKey.longKey("process.pid"), ProcessHandle.current().pid());
+        } catch (Throwable ignored) {
+            // fallback: parse "pid@hostname" from RuntimeMXBean.getName()
+            try {
+                String runtimeName = ManagementFactory.getRuntimeMXBean().getName();
+                int at = runtimeName.indexOf('@');
+                if (at > 0) {
+                    builder.put(AttributeKey.longKey("process.pid"),
+                            Long.parseLong(runtimeName.substring(0, at)));
+                }
+            } catch (Throwable ignored2) { /* best-effort */ }
+        }
+
+        // process.runtime.* — JVM identity information
+        builder.put(AttributeKey.stringKey("process.runtime.name"),
+                System.getProperty("java.runtime.name", "unknown"));
+        builder.put(AttributeKey.stringKey("process.runtime.version"),
+                System.getProperty("java.runtime.version", "unknown"));
+        builder.put(AttributeKey.stringKey("process.runtime.description"),
+                ManagementFactory.getRuntimeMXBean().getVmName()
+                        + " " + ManagementFactory.getRuntimeMXBean().getVmVersion());
+
+        // host.name — local hostname (DNS or /etc/hostname)
+        try {
+            builder.put(AttributeKey.stringKey("host.name"),
+                    InetAddress.getLocalHost().getHostName());
+        } catch (Throwable ignored) { /* no network config; skip */ }
+
+        // os.type — normalised to OTel semconv values
+        String rawOs = System.getProperty("os.name", "").toLowerCase();
+        String osType = rawOs.contains("win") ? "windows"
+                : rawOs.contains("mac") || rawOs.contains("darwin") ? "darwin"
+                : rawOs.contains("linux") ? "linux"
+                : rawOs.contains("freebsd") ? "freebsd"
+                : rawOs.contains("solaris") || rawOs.contains("sunos") ? "solaris"
+                : rawOs.contains("aix") ? "aix"
+                : "unknown";
+        builder.put(AttributeKey.stringKey("os.type"), osType);
+        builder.put(AttributeKey.stringKey("os.description"),
+                System.getProperty("os.name", "") + " " + System.getProperty("os.version", ""));
+
+        return builder.build();
+    }
+
+    /**
+     * Registers JVM metric observers against the supplied OpenTelemetry instance.
+     * Each {@code registerObservers()} call attaches an {@code ObservableGauge} or
+     * {@code ObservableCounter} to the SDK MeterProvider — they are no-ops when the
+     * metrics exporter is set to {@code none} (the default).
+     */
+    private static void registerJvmMetrics(OpenTelemetry openTelemetry) {
+        Classes.registerObservers(openTelemetry);
+        Cpu.registerObservers(openTelemetry);
+        GarbageCollector.registerObservers(openTelemetry);
+        MemoryPools.registerObservers(openTelemetry);
+        Threads.registerObservers(openTelemetry);
     }
 
     /**
