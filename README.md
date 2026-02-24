@@ -520,17 +520,21 @@ redis.rxHgetall("user:42").subscribe(response -> { ... });
 ```java
 import io.last9.tracing.otel.v3.TracedAerospikeClient;
 
-// Instead of: IAerospikeClient client = new AerospikeClient("localhost", 3000);
-IAerospikeClient client = TracedAerospikeClient.wrap(
+// Instead of: AerospikeClient client = new AerospikeClient("localhost", 3000);
+TracedAerospikeClient client = TracedAerospikeClient.wrap(
         new AerospikeClient("localhost", 3000), "my-namespace");
 
 // namespace is optional:
-IAerospikeClient client = TracedAerospikeClient.wrap(new AerospikeClient("localhost", 3000));
+TracedAerospikeClient client = TracedAerospikeClient.wrap(new AerospikeClient("localhost", 3000));
 
 // Every data-plane call (get, put, delete, exists, operate, query, scanAll)
-// automatically gets a CLIENT span:
+// automatically gets a CLIENT span — same method signatures as AerospikeClient:
 Record record = client.get(null, new Key("my-namespace", "users", "user:123"));
 client.put(null, key, new Bin("name", "Alice"));
+client.delete(null, key);
+
+// For admin/lifecycle/async operations not covered above, use unwrap():
+client.unwrap().registerUdf(...);
 ```
 
 ### Option 2: Manual wrapping with DbTracing
