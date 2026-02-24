@@ -11,13 +11,14 @@ import io.vertx.rxjava3.sqlclient.Tuple;
 /**
  * A tracing wrapper for Vert.x 4 reactive SQL pools (PostgreSQL, MySQL, etc.).
  *
- * <p>Wraps any {@link Pool} — including {@code io.vertx.rxjava3.pgclient.PgPool} —
- * and adds an OpenTelemetry CLIENT span to every query or prepared-query execution.
+ * <p>Wraps any {@link Pool} — including {@code io.vertx.rxjava3.pgclient.PgPool} and
+ * {@code io.vertx.rxjava3.mysqlclient.MySQLPool} — and adds an OpenTelemetry CLIENT span
+ * to every query or prepared-query execution.
  *
  * <h2>Usage — direct pool</h2>
  * <pre>{@code
  * PgPool pool = PgPool.pool(vertx, connectOptions, poolOptions);
- * TracedPgPool traced = TracedPgPool.wrap(pool, "orders_db");
+ * TracedDBPool traced = TracedDBPool.wrap(pool, "postgresql", "orders_db");
  *
  * // Every query automatically gets a CLIENT span:
  * traced.query("SELECT * FROM orders WHERE id = $1")
@@ -33,8 +34,8 @@ import io.vertx.rxjava3.sqlclient.Tuple;
  * PostgresClient pgClient = PostgresClient.create(vertx);
  * pgClient.rxConnect()
  *     .doOnComplete(() -> {
- *         TracedPgPool tracedMaster = TracedPgPool.wrap(pgClient.getMasterPool(), "mydb");
- *         TracedPgPool tracedSlave  = TracedPgPool.wrap(pgClient.getSlavePool(),  "mydb");
+ *         TracedDBPool tracedMaster = TracedDBPool.wrap(pgClient.getMasterPool(), "postgresql", "mydb");
+ *         TracedDBPool tracedSlave  = TracedDBPool.wrap(pgClient.getSlavePool(),  "postgresql", "mydb");
  *     })
  *     .subscribe();
  * }</pre>
@@ -44,12 +45,12 @@ import io.vertx.rxjava3.sqlclient.Tuple;
  *
  * @see DbTracing for wrapping arbitrary database operations in CLIENT spans
  */
-public final class TracedPgPool {
+public final class TracedDBPool {
 
     private final Pool pool;
     private final DbTracing db;
 
-    private TracedPgPool(Pool pool, DbTracing db) {
+    private TracedDBPool(Pool pool, DbTracing db) {
         this.pool = pool;
         this.db = db;
     }
@@ -57,22 +58,24 @@ public final class TracedPgPool {
     /**
      * Wraps a pool using {@link GlobalOpenTelemetry}. The {@code db.name} attribute is omitted.
      *
-     * @param pool the pool to wrap (PgPool, MySQLPool, or any other reactive Pool)
+     * @param pool     the pool to wrap (PgPool, MySQLPool, or any other reactive Pool)
+     * @param dbSystem the database system identifier (e.g. {@code "postgresql"}, {@code "mysql"})
      * @return a tracing wrapper
      */
-    public static TracedPgPool wrap(Pool pool) {
-        return wrap(pool, null, GlobalOpenTelemetry.get());
+    public static TracedDBPool wrap(Pool pool, String dbSystem) {
+        return wrap(pool, dbSystem, null, GlobalOpenTelemetry.get());
     }
 
     /**
      * Wraps a pool using {@link GlobalOpenTelemetry}.
      *
-     * @param pool   the pool to wrap
-     * @param dbName the database name shown in the {@code db.name} span attribute
+     * @param pool     the pool to wrap
+     * @param dbSystem the database system identifier (e.g. {@code "postgresql"}, {@code "mysql"})
+     * @param dbName   the database name shown in the {@code db.name} span attribute
      * @return a tracing wrapper
      */
-    public static TracedPgPool wrap(Pool pool, String dbName) {
-        return wrap(pool, dbName, GlobalOpenTelemetry.get());
+    public static TracedDBPool wrap(Pool pool, String dbSystem, String dbName) {
+        return wrap(pool, dbSystem, dbName, GlobalOpenTelemetry.get());
     }
 
     /**
@@ -80,13 +83,14 @@ public final class TracedPgPool {
      * Useful in tests that construct their own {@code OpenTelemetrySdk}.
      *
      * @param pool          the pool to wrap
+     * @param dbSystem      the database system identifier
      * @param dbName        the database name; may be {@code null} to omit
      * @param openTelemetry the OpenTelemetry instance to use
      * @return a tracing wrapper
      */
-    public static TracedPgPool wrap(Pool pool, String dbName, OpenTelemetry openTelemetry) {
-        DbTracing db = DbTracing.create("postgresql", dbName, openTelemetry);
-        return new TracedPgPool(pool, db);
+    public static TracedDBPool wrap(Pool pool, String dbSystem, String dbName, OpenTelemetry openTelemetry) {
+        DbTracing db = DbTracing.create(dbSystem, dbName, openTelemetry);
+        return new TracedDBPool(pool, db);
     }
 
     /**
@@ -102,7 +106,7 @@ public final class TracedPgPool {
     /**
      * Executes a parameterised prepared query with a CLIENT span.
      *
-     * @param sql  the SQL statement (with {@code $1}, {@code $2} … placeholders for PostgreSQL)
+     * @param sql  the SQL statement
      * @param args the bind parameters
      * @return a Single that emits the result rows
      */
