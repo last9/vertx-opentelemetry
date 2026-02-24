@@ -75,10 +75,22 @@ public final class TracedAerospikeClient {
 
     /**
      * Wraps an {@link IAerospikeClient} with tracing using the supplied {@link OpenTelemetry}.
+     * The {@code db.name} attribute is omitted from spans. Useful in tests.
+     *
+     * @param client        the Aerospike client to wrap
+     * @param openTelemetry the OpenTelemetry instance to use
+     * @return a traced proxy implementing {@code IAerospikeClient}
+     */
+    public static IAerospikeClient wrap(IAerospikeClient client, OpenTelemetry openTelemetry) {
+        return wrap(client, null, openTelemetry);
+    }
+
+    /**
+     * Wraps an {@link IAerospikeClient} with tracing using the supplied {@link OpenTelemetry}.
      * Useful in tests.
      *
      * @param client        the Aerospike client to wrap
-     * @param dbNamespace   the Aerospike namespace
+     * @param dbNamespace   the Aerospike namespace; may be {@code null} to omit
      * @param openTelemetry the OpenTelemetry instance to use
      * @return a traced proxy implementing {@code IAerospikeClient}
      */

@@ -120,6 +120,23 @@ class TracedAerospikeClientTest {
     }
 
     @Test
+    void wrapWithoutNamespaceOmitsDbNameAttribute() {
+        IAerospikeClient stub = createStub(new Record(new HashMap<>(), 1, 0), null);
+        IAerospikeClient traced = TracedAerospikeClient.wrap(stub, otel.getOpenTelemetry());
+
+        Key key = new Key("test-ns", "users", "user:123");
+        traced.get(null, key);
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+
+        SpanData span = spans.get(0);
+        assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.system"))).isEqualTo("aerospike");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.name"))).isNull();
+    }
+
+    @Test
     void lifecycleMethodsNotTraced() {
         IAerospikeClient stub = createStub(null, null);
         IAerospikeClient traced = createTraced(stub);
