@@ -291,9 +291,11 @@ Exception in thread "main" java.lang.NoClassDefFoundError: io/last9/tracing/otel
 Caused by: java.lang.ClassNotFoundException: io.last9.tracing.otel.OtelSdkSetup
 ```
 
-**Cause**: You are using a JAR built before version 1.3.0-beta.2. Earlier JARs were thin — `OtelSdkSetup` and `MdcTraceTurboFilter` lived in a separate `vertx-otel-core` artifact that was pulled in as a Maven transitive dependency. When installed manually via `mvn install:install-file -DgeneratePom=true`, the generated POM has no dependencies, so `vertx-otel-core` is never resolved and the class is missing at runtime.
+**Cause**: You are using a JAR built before version 1.3.0-beta.3. Earlier JARs were thin — `OtelSdkSetup` and `MdcTraceTurboFilter` lived in a separate `vertx-otel-core` artifact that was pulled in as a Maven transitive dependency. When installed manually via `mvn install:install-file -DgeneratePom=true`, the generated POM has no dependencies, so `vertx-otel-core` is never resolved and the class is missing at runtime.
 
-**Fix**: Download the latest JAR from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases). Since 1.3.0-beta.2 the JAR is fully self-contained — `vertx-otel-core`, the full OpenTelemetry SDK, and all instrumentation are bundled inside the single JAR. No separate `vertx-otel-core` dependency is needed.
+> **Note**: `v1.3.0-beta.2` also has this issue. Although it was intended to be the first bundled release, its published JAR is thin due to a CI race condition (the release was already published before the bundling commit was tagged). Use `v1.3.0-beta.3` or later.
+
+**Fix**: Download `v1.3.0-beta.3` or later from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases). Since 1.3.0-beta.3 the JAR is fully self-contained — `vertx-otel-core`, the full OpenTelemetry SDK, and all instrumentation are bundled inside the single JAR. No separate `vertx-otel-core` dependency is needed.
 
 You can verify a JAR is self-contained before installing it:
 
@@ -728,9 +730,9 @@ To test unreleased changes before a full release:
 Go to [Actions](https://github.com/last9/vertx-opentelemetry/actions/workflows/ci.yaml), click a
 run, and download the `jars-<sha>` artifact.
 
-**Option 2: Beta releases** — tagged pre-releases (e.g., `v1.3.0-beta.1`) appear on the
+**Option 2: Beta releases** — tagged pre-releases appear on the
 [Releases](https://github.com/last9/vertx-opentelemetry/releases) page marked as "Pre-release"
-with downloadable JARs.
+with downloadable JARs. The latest pre-release is **`v1.3.0-beta.3`** — use this version; `v1.3.0-beta.2` has a known issue where the published JAR is thin (OTel SDK not bundled).
 
 ## Environment Variables
 
