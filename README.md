@@ -138,7 +138,7 @@ Logback OpenTelemetry appender installed for log export
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
 - **Kafka producer + consumer tracing** (Vert.x 3 + 4) — `TracedKafkaProducer` creates PRODUCER spans with `traceparent` header propagation; `TracedKafkaConsumer` creates CONSUMER spans per batch with one-line setup
 - **Database tracing** (Vert.x 3) — auto-instrumented wrappers for reactive MySQL (`TracedMySQLClient`), legacy SQL (`TracedSQLClient`), Redis (`TracedRedisClient`), and Aerospike (`TracedAerospikeClient`), plus generic `DbTracing` for any other database
-- **Database tracing** (Vert.x 4) — `TracedPgPool` wraps any reactive SQL pool (PostgreSQL, MySQL) with CLIENT spans including the SQL statement; `DbTracing` for wrapping arbitrary operations with custom span names
+- **Database tracing** (Vert.x 4) — `TracedDBPool` wraps any reactive SQL pool (PostgreSQL, MySQL) with CLIENT spans including the SQL statement; `DbTracing` for wrapping arbitrary operations with custom span names
 - **Generic RxJava2 client wrapping** (Vert.x 3) — `TracedRxClient.wrap()` adds CLIENT spans to any RxJava2 interface via dynamic proxy — works with any third-party MySQL/Aerospike/custom data-access client
 - **Auto-tracing WebClient** (Vert.x 3) — `TracedWebClient` creates CLIENT spans and injects `traceparent` on every outgoing request — no per-call wrapping needed
 - **Worker thread context propagation** (Vert.x 3) — `TracedVertx.rxExecuteBlocking()` carries OTel context from event loop to worker threads so blocking calls produce connected spans
@@ -784,21 +784,25 @@ The `VertxTracer` SPI automatically traces HTTP client/server spans, but databas
 (PostgreSQL, MySQL, etc.) do not produce spans automatically. Use `TracedPgPool` or `DbTracing`
 to add CLIENT spans with SQL-statement-level granularity.
 
-### TracedPgPool (recommended)
+### TracedDBPool (recommended)
 
 Wraps any reactive SQL `Pool` — including `PgPool` and `MySQLPool` — and adds a CLIENT span to
 every `query()` and `preparedQuery()` call:
 
 ```java
-import io.last9.tracing.otel.v4.TracedPgPool;
+import io.last9.tracing.otel.v4.TracedDBPool;
 import io.vertx.rxjava3.pgclient.PgPool;
 
-// Instead of using pool directly:
+// PostgreSQL:
 PgPool pool = PgPool.pool(vertx, connectOptions, poolOptions);
-TracedPgPool traced = TracedPgPool.wrap(pool, "orders_db");
+TracedDBPool traced = TracedDBPool.wrap(pool, "postgresql", "orders_db");
+
+// MySQL:
+MySQLPool mysqlPool = MySQLPool.pool(vertx, connectOptions, poolOptions);
+TracedDBPool tracedMysql = TracedDBPool.wrap(mysqlPool, "mysql", "orders_db");
 
 // db name is optional — omit if not relevant:
-TracedPgPool traced = TracedPgPool.wrap(pool);
+TracedDBPool traced = TracedDBPool.wrap(pool, "postgresql");
 
 // Every query automatically gets a CLIENT span:
 traced.query("SELECT * FROM orders")
@@ -813,7 +817,7 @@ traced.unwrap().withTransaction(conn -> ...);
 ```
 
 Each CLIENT span includes:
-- `db.system` = `"postgresql"`
+- `db.system` = the system identifier you passed (e.g. `"postgresql"`, `"mysql"`)
 - `db.statement` = the SQL string
 - `db.name` = the database name you passed to `wrap()`
 
