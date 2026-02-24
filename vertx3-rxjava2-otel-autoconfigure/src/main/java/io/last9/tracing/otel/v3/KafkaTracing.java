@@ -2,6 +2,7 @@ package io.last9.tracing.otel.v3;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
@@ -9,6 +10,7 @@ import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapSetter;
+import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.reactivex.Single;
 import io.vertx.core.Handler;
@@ -152,7 +154,8 @@ public final class KafkaTracing {
             try (Scope ignored = span.makeCurrent()) {
                 delegate.handle(records);
             } catch (Throwable t) {
-                span.recordException(t);
+                span.recordException(t,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
                 throw t;
             } finally {
@@ -274,7 +277,8 @@ public final class KafkaTracing {
                             SemanticAttributes.MessagingOperationValues.PROCESS)
                     .startSpan();
             try (Scope ignored = span.makeCurrent()) {
-                span.recordException(err);
+                span.recordException(err,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, err.getMessage());
             } finally {
                 span.end();
@@ -381,14 +385,16 @@ public final class KafkaTracing {
                                 metadata.getOffset());
                     })
                     .doOnError(err -> {
-                        span.recordException(err);
+                        span.recordException(err,
+                                Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                         span.setStatus(StatusCode.ERROR, err.getMessage());
                     })
                     // doFinally guarantees span.end() on success, error, AND disposal/cancellation
                     .doFinally(span::end);
         } catch (Throwable t) {
             // sendSingle construction itself threw (e.g. closed producer, serialization error)
-            span.recordException(t);
+            span.recordException(t,
+                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
             span.setStatus(StatusCode.ERROR, t.getMessage());
             span.end();
             throw t;

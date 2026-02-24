@@ -2,11 +2,13 @@ package io.last9.tracing.otel.v3;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.reactivex.Completable;
 import io.reactivex.Maybe;
@@ -106,7 +108,8 @@ public final class DbTracing {
             try {
                 return singleSupplier.get()
                         .doOnError(err -> {
-                            span.recordException(err);
+                            span.recordException(err,
+                                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                             span.setStatus(StatusCode.ERROR, err.getMessage());
                         })
                         .doFinally(() -> {
@@ -114,7 +117,8 @@ public final class DbTracing {
                             span.end();
                         });
             } catch (Throwable t) {
-                span.recordException(t);
+                span.recordException(t,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
                 scope.close();
                 span.end();
@@ -137,7 +141,8 @@ public final class DbTracing {
             try {
                 return completableSupplier.get()
                         .doOnError(err -> {
-                            span.recordException(err);
+                            span.recordException(err,
+                                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                             span.setStatus(StatusCode.ERROR, err.getMessage());
                         })
                         .doFinally(() -> {
@@ -145,7 +150,8 @@ public final class DbTracing {
                             span.end();
                         });
             } catch (Throwable t) {
-                span.recordException(t);
+                span.recordException(t,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
                 scope.close();
                 span.end();
@@ -169,7 +175,8 @@ public final class DbTracing {
             try {
                 return maybeSupplier.get()
                         .doOnError(err -> {
-                            span.recordException(err);
+                            span.recordException(err,
+                                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                             span.setStatus(StatusCode.ERROR, err.getMessage());
                         })
                         .doFinally(() -> {
@@ -177,7 +184,8 @@ public final class DbTracing {
                             span.end();
                         });
             } catch (Throwable t) {
-                span.recordException(t);
+                span.recordException(t,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
                 scope.close();
                 span.end();
@@ -207,7 +215,8 @@ public final class DbTracing {
             T result = supplier.get();
             return result;
         } catch (Throwable t) {
-            span.recordException(t);
+            span.recordException(t,
+                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
             span.setStatus(StatusCode.ERROR, t.getMessage());
             throw t;
         } finally {
