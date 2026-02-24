@@ -54,6 +54,8 @@
         <opentelemetry.version>1.35.0</opentelemetry.version>
         <opentelemetry-instrumentation.version>2.4.0</opentelemetry-instrumentation.version>
         <opentelemetry-semconv.version>1.25.0-alpha</opentelemetry-semconv.version>
+        <!-- OTel contrib resource detectors (AWS, GCP) — version must align with SDK 1.35.0 -->
+        <opentelemetry-contrib.version>1.33.0-alpha</opentelemetry-contrib.version>
 
         <!-- Vert.x -->
         <vertx4.version>4.5.10</vertx4.version>
@@ -204,6 +206,11 @@
                                         <include>io.opentelemetry:*</include>
                                         <include>io.opentelemetry.semconv:*</include>
                                         <include>io.opentelemetry.instrumentation:*</include>
+                                        <!-- AWS + GCP cloud resource detectors -->
+                                        <include>io.opentelemetry.contrib:opentelemetry-aws-resources</include>
+                                        <include>io.opentelemetry.contrib:opentelemetry-gcp-resources</include>
+                                        <!-- GCP detector support library (transitive of gcp-resources) -->
+                                        <include>com.google.cloud.opentelemetry:detector-resources-support</include>
                                     </includes>
                                     <!-- Exclude the OkHttp-based sender: its classes are bundled
                                          via io.opentelemetry:* but okhttp3 itself is not, causing
@@ -214,6 +221,12 @@
                                         <exclude>io.opentelemetry:opentelemetry-exporter-sender-okhttp</exclude>
                                     </excludes>
                                 </artifactSet>
+                                <transformers>
+                                    <!-- Merge META-INF/services SPI files from all bundled JARs.
+                                         Without this, only one ResourceProvider set survives shading
+                                         and cloud/K8s detectors registered by contrib JARs are lost. -->
+                                    <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                </transformers>
                             </configuration>
                         </execution>
                     </executions>
