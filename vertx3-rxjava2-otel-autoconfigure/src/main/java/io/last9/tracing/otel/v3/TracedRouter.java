@@ -2,6 +2,7 @@ package io.last9.tracing.otel.v3;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
@@ -10,6 +11,7 @@ import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
+import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.vertx.reactivex.core.Vertx;
 import io.vertx.reactivex.core.http.HttpServerRequest;
@@ -165,11 +167,12 @@ public final class TracedRouter {
                 int statusCode = ctx.response().getStatusCode();
                 span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, (long) statusCode);
                 if (statusCode >= 500) {
-                    span.setStatus(StatusCode.ERROR);
                     Throwable failure = ctx.failure();
                     if (failure != null) {
-                        span.recordException(failure);
+                        span.recordException(failure,
+                                Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                     }
+                    span.setStatus(StatusCode.ERROR);
                 }
             });
 

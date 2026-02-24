@@ -2,11 +2,13 @@ package io.last9.tracing.otel.v4;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.vertx.core.Handler;
 import io.vertx.kafka.client.consumer.KafkaConsumerRecords;
@@ -97,7 +99,8 @@ public final class KafkaTracing {
             try (Scope ignored = span.makeCurrent()) {
                 delegate.handle(records);
             } catch (Throwable t) {
-                span.recordException(t);
+                span.recordException(t,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
                 throw t;
             } finally {
