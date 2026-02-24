@@ -32,6 +32,16 @@
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
 
+        <!-- JDK HTTP sender (replaces the default okhttp sender).
+             opentelemetry-exporter-otlp pulls in opentelemetry-exporter-sender-okhttp by
+             default, which requires okhttp3 on the classpath at runtime. Since we bundle
+             OTel classes but not okhttp3 itself, that causes NoClassDefFoundError: okhttp3/Interceptor.
+             The JDK sender uses Java 11's built-in HttpClient — no external dependency needed. -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-sender-jdk</artifactId>
+        </dependency>
+
         <!-- OpenTelemetry Semantic Conventions -->
         <dependency>
             <groupId>io.opentelemetry.semconv</groupId>

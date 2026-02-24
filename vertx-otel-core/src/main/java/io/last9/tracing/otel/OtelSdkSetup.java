@@ -90,6 +90,16 @@ public final class OtelSdkSetup {
                 (key, value) -> log.info("  resource.{} = {}", key.getKey(), value));
 
         OpenTelemetrySdk sdk = AutoConfiguredOpenTelemetrySdk.builder()
+                // Default to http/protobuf so the bundled JDK sender is used.
+                // The default gRPC protocol requires okhttp3 which is NOT bundled.
+                // Customers can override with OTEL_EXPORTER_OTLP_PROTOCOL=grpc if they
+                // add okhttp3 to their own classpath.
+                .addPropertiesSupplier(() -> {
+                    if (System.getenv("OTEL_EXPORTER_OTLP_PROTOCOL") == null) {
+                        return java.util.Map.of("otel.exporter.otlp.protocol", "http/protobuf");
+                    }
+                    return java.util.Map.of();
+                })
                 .addResourceCustomizer((resource, config) ->
                         resource.merge(processResource))
                 .setResultAsGlobal()

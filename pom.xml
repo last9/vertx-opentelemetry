@@ -205,6 +205,14 @@
                                         <include>io.opentelemetry.semconv:*</include>
                                         <include>io.opentelemetry.instrumentation:*</include>
                                     </includes>
+                                    <!-- Exclude the OkHttp-based sender: its classes are bundled
+                                         via io.opentelemetry:* but okhttp3 itself is not, causing
+                                         NoClassDefFoundError: okhttp3/Interceptor at startup.
+                                         The JDK sender (opentelemetry-exporter-sender-jdk) uses
+                                         Java 11's built-in HttpClient and requires no extra deps. -->
+                                    <excludes>
+                                        <exclude>io.opentelemetry:opentelemetry-exporter-sender-okhttp</exclude>
+                                    </excludes>
                                 </artifactSet>
                             </configuration>
                         </execution>
