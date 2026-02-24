@@ -284,6 +284,26 @@ Vert.x 4 handles outgoing HTTP propagation automatically for any client created 
 
 ## Troubleshooting
 
+### ClassNotFoundException / NoClassDefFoundError: OtelSdkSetup
+
+```
+Exception in thread "main" java.lang.NoClassDefFoundError: io/last9/tracing/otel/OtelSdkSetup
+Caused by: java.lang.ClassNotFoundException: io.last9.tracing.otel.OtelSdkSetup
+```
+
+**Cause**: You are using a JAR built before version 1.3.0-beta.2. Earlier JARs were thin — `OtelSdkSetup` and `MdcTraceTurboFilter` lived in a separate `vertx-otel-core` artifact that was pulled in as a Maven transitive dependency. When installed manually via `mvn install:install-file -DgeneratePom=true`, the generated POM has no dependencies, so `vertx-otel-core` is never resolved and the class is missing at runtime.
+
+**Fix**: Download the latest JAR from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases). Since 1.3.0-beta.2 the JAR is fully self-contained — `vertx-otel-core`, the full OpenTelemetry SDK, and all instrumentation are bundled inside the single JAR. No separate `vertx-otel-core` dependency is needed.
+
+You can verify a JAR is self-contained before installing it:
+
+```bash
+jar -tf vertx3-rxjava2-otel-autoconfigure-1.3.0.jar | grep OtelSdkSetup
+# Should print: io/last9/tracing/otel/OtelSdkSetup.class
+```
+
+If nothing is printed, the JAR is the old thin version — upgrade.
+
 ### All requests appear in one giant trace (cascading spans)
 
 If every HTTP request on the same event-loop thread shows up as part of a single cascading trace
