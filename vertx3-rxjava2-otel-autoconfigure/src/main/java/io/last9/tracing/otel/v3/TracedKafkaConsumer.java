@@ -122,6 +122,10 @@ public final class TracedKafkaConsumer<K, V> {
         consumer.getDelegate().batchHandler(
                 KafkaTracing.tracedBatchHandler(topic, consumerGroup, batchHandler, openTelemetry));
 
+        // Infrastructure-level errors (broker unreachable, deserialization failures, auth
+        // errors) arrive here — not via the batch handler. Create an ERROR span for each.
+        consumer.exceptionHandler(KafkaTracing.tracedExceptionHandler(topic, openTelemetry));
+
         // A per-record handler MUST be set for Vert.x to start polling.
         // The batch handler receives all records; this is a no-op.
         consumer.handler(record -> {});

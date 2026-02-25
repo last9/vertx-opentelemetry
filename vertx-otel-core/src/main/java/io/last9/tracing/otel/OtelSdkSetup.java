@@ -2,13 +2,19 @@ package io.last9.tracing.otel;
 
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
+import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 import io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.Classes;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.Cpu;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.GarbageCollector;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.MemoryPools;
+import io.opentelemetry.instrumentation.runtimemetrics.java8.Threads;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
-import io.opentelemetry.sdk.resources.Resource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,7 +23,23 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Auto-configures the OpenTelemetry SDK from {@code OTEL_*} environment variables,
  * ensures W3C trace context propagation is active (healing fat-jar shading issues),
- * and installs the Logback OTLP appender for log export.
+ * installs the Logback OTLP appender for log export, and registers JVM runtime metrics.
+ *
+ * <h2>Resource attributes added automatically</h2>
+ * <p>Process, host, and OS attributes are contributed via SPI by {@code opentelemetry-resources}:
+ * {@code process.pid}, {@code process.runtime.*}, {@code host.name}, {@code host.arch},
+ * {@code os.type}, {@code os.description}.
+ *
+ * <h2>JVM metrics (requires {@code OTEL_METRICS_EXPORTER=otlp})</h2>
+ * <p>The following JVM metrics are registered and exported when a metrics exporter is
+ * configured (no-op otherwise):
+ * <ul>
+ *   <li>{@code jvm.memory.used}, {@code jvm.memory.committed}, {@code jvm.memory.max} — heap + non-heap</li>
+ *   <li>{@code jvm.gc.duration} — GC pause time histogram</li>
+ *   <li>{@code jvm.thread.count} — live thread count by state</li>
+ *   <li>{@code jvm.cpu.time}, {@code jvm.cpu.recent_utilization} — CPU usage</li>
+ *   <li>{@code jvm.class.count}, {@code jvm.class.loaded}, {@code jvm.class.unloaded}</li>
+ * </ul>
  */
 public final class OtelSdkSetup {
 
@@ -32,9 +54,10 @@ public final class OtelSdkSetup {
      *
      * <p>This method:
      * <ol>
-     *   <li>Builds and registers the SDK as the global instance</li>
+     *   <li>Builds and registers the SDK as the global instance (process/host/OS attributes via SPI)</li>
      *   <li>Verifies W3C trace context propagation is configured</li>
      *   <li>Installs the Logback OpenTelemetry appender for log export</li>
+     *   <li>Registers JVM runtime metric observers</li>
      * </ol>
      *
      * @return a fully configured OpenTelemetry instance
@@ -47,16 +70,30 @@ public final class OtelSdkSetup {
         log.info("Service: {}", serviceName);
         log.info("OTLP Endpoint: {}", otlpEndpoint);
 
-        // 1. Auto-configure OpenTelemetry SDK from OTEL_* environment variables.
-        //    Set telemetry.distro.name so that OTel Collector transform processors
-        //    (which map new semconv attributes like http.request.method to legacy
-        //    names like http.method) can match on this resource attribute.
+        // 1. Auto-configure SDK from OTEL_* env vars.
+        //    Process/host/OS resource attributes (process.pid, host.name, os.type, etc.) are
+        //    contributed automatically by the SPI providers in opentelemetry-resources:
+        //    ProcessResourceProvider, HostResourceProvider, OsResourceProvider.
+        //
+        //    telemetry.distro.name is set explicitly so Last9's OTel Collector transform
+        //    processor can identify spans from this library and apply semconv remapping
+        //    (e.g. http.response.status_code → http.status_code).
+        Resource distroResource = Resource.create(Attributes.of(
+                AttributeKey.stringKey("telemetry.distro.name"),
+                "opentelemetry-java-instrumentation"));
+
         OpenTelemetrySdk sdk = AutoConfiguredOpenTelemetrySdk.builder()
-                .addResourceCustomizer((resource, config) ->
-                        resource.merge(Resource.builder()
-                                .put(AttributeKey.stringKey("telemetry.distro.name"),
-                                        "opentelemetry-java-instrumentation")
-                                .build()))
+                // Default to http/protobuf so the bundled JDK sender is used.
+                // The default gRPC protocol requires okhttp3 which is NOT bundled.
+                // Customers can override with OTEL_EXPORTER_OTLP_PROTOCOL=grpc if they
+                // add okhttp3 to their own classpath.
+                .addPropertiesSupplier(() -> {
+                    if (System.getenv("OTEL_EXPORTER_OTLP_PROTOCOL") == null) {
+                        return java.util.Map.of("otel.exporter.otlp.protocol", "http/protobuf");
+                    }
+                    return java.util.Map.of();
+                })
+                .addResourceCustomizer((resource, config) -> resource.merge(distroResource))
                 .setResultAsGlobal()
                 .build()
                 .getOpenTelemetrySdk();
@@ -72,8 +109,28 @@ public final class OtelSdkSetup {
         OpenTelemetryAppender.install(openTelemetry);
         log.info("Logback OpenTelemetry appender installed for log export");
 
+        // 4. Register JVM runtime metric observers.
+        //    These are no-ops when OTEL_METRICS_EXPORTER is unset (default "none").
+        //    Set OTEL_METRICS_EXPORTER=otlp to export to the configured OTLP endpoint.
+        registerJvmMetrics(openTelemetry);
+        log.info("JVM runtime metrics registered (memory, GC, threads, CPU, classes)");
+
         log.info("=== OpenTelemetry Ready ===");
         return openTelemetry;
+    }
+
+    /**
+     * Registers JVM metric observers against the supplied OpenTelemetry instance.
+     * Each {@code registerObservers()} call attaches an {@code ObservableGauge} or
+     * {@code ObservableCounter} to the SDK MeterProvider — they are no-ops when the
+     * metrics exporter is set to {@code none} (the default).
+     */
+    private static void registerJvmMetrics(OpenTelemetry openTelemetry) {
+        Classes.registerObservers(openTelemetry);
+        Cpu.registerObservers(openTelemetry);
+        GarbageCollector.registerObservers(openTelemetry);
+        MemoryPools.registerObservers(openTelemetry);
+        Threads.registerObservers(openTelemetry);
     }
 
     /**

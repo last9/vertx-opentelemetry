@@ -151,6 +151,28 @@ class TracedSQLClientTest {
         assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
     }
 
+    @Test
+    void wrapWithoutDbNameOmitsDbNameAttribute() {
+        ResultSet rs = new ResultSet();
+        rs.setColumnNames(Collections.singletonList("id"));
+        rs.setResults(Collections.singletonList(new JsonArray().add(1)));
+
+        SQLClient stub = createStubSQLClient(rs, null, null, null);
+        io.vertx.reactivex.ext.sql.SQLClient traced = TracedSQLClient.wrap(
+                io.vertx.reactivex.ext.sql.SQLClient.newInstance(stub),
+                "mysql", otel.getOpenTelemetry());
+
+        traced.rxQuery("SELECT 1").blockingGet();
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+
+        SpanData span = spans.get(0);
+        assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.system"))).isEqualTo("mysql");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.name"))).isNull();
+    }
+
     // ---- Dynamic proxy stubs ----
 
     @SuppressWarnings("unchecked")

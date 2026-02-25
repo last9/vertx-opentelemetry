@@ -100,6 +100,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Vert.x reactive MySQL client (provided - app will have this if using MySQL reactive API) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-mysql-client</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Aerospike client (provided - app will have this if using Aerospike) -->
         <dependency>
             <groupId>com.aerospike</groupId>
@@ -166,6 +173,10 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
             </plugin>
         </plugins>
     </build>

@@ -32,6 +32,16 @@
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
 
+        <!-- JDK HTTP sender (replaces the default okhttp sender).
+             opentelemetry-exporter-otlp pulls in opentelemetry-exporter-sender-okhttp by
+             default, which requires okhttp3 on the classpath at runtime. Since we bundle
+             OTel classes but not okhttp3 itself, that causes NoClassDefFoundError: okhttp3/Interceptor.
+             The JDK sender uses Java 11's built-in HttpClient — no external dependency needed. -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-sender-jdk</artifactId>
+        </dependency>
+
         <!-- OpenTelemetry Semantic Conventions -->
         <dependency>
             <groupId>io.opentelemetry.semconv</groupId>
@@ -50,6 +60,59 @@
             <groupId>io.opentelemetry.instrumentation</groupId>
             <artifactId>opentelemetry-logback-mdc-1.0</artifactId>
             <version>${opentelemetry-instrumentation.version}-alpha</version>
+        </dependency>
+
+        <!-- JVM runtime metrics: memory, GC, threads, CPU, class-loading -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-runtime-telemetry-java8</artifactId>
+            <version>${opentelemetry-instrumentation.version}-alpha</version>
+        </dependency>
+
+        <!-- Process/host/OS resource providers (process.pid, host.name, os.type, etc.).
+             Registers ProcessResourceProvider, HostResourceProvider, OsResourceProvider via SPI
+             so autoconfigure picks them up without manual attribute building. -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-resources</artifactId>
+            <version>${opentelemetry-instrumentation.version}-alpha</version>
+        </dependency>
+
+        <!-- AWS resource detectors: EC2, ECS, EKS, Lambda, Elastic Beanstalk.
+             Registered via SPI — autoconfigure picks them up automatically.
+             Makes short HTTP calls to IMDS at startup; silently skips if not on AWS. -->
+        <dependency>
+            <groupId>io.opentelemetry.contrib</groupId>
+            <artifactId>opentelemetry-aws-resources</artifactId>
+            <version>${opentelemetry-contrib.version}</version>
+        </dependency>
+
+        <!-- Kotlin stdlib: okhttp 4.x is written in Kotlin, kotlin-stdlib is required at runtime.
+             Bundled here so customers don't need to add it separately. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib</artifactId>
+            <version>1.9.22</version>
+        </dependency>
+
+        <!-- OkHttp: required by opentelemetry-aws-resources (Ec2Resource calls EC2 IMDS via
+             OkHttpClient). This is bundled into the fat JAR so the AWS detector works on EC2
+             without requiring customers to add okhttp as a dependency.
+             NOTE: opentelemetry-exporter-sender-okhttp is excluded from the shade; only the
+             okhttp library itself (not its OTel sender SPI) is bundled here. -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>4.12.0</version>
+        </dependency>
+
+        <!-- GCP resource detectors: GCE, GKE, Cloud Run, App Engine.
+             Registered via SPI — autoconfigure picks them up automatically.
+             Makes short HTTP calls to GCP metadata server at startup; silently skips if not on GCP. -->
+        <dependency>
+            <groupId>io.opentelemetry.contrib</groupId>
+            <artifactId>opentelemetry-gcp-resources</artifactId>
+            <version>${opentelemetry-contrib.version}</version>
         </dependency>
 
         <!-- Logging -->

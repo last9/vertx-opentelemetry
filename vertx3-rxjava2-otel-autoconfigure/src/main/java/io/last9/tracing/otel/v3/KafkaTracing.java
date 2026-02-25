@@ -2,20 +2,31 @@ package io.last9.tracing.otel.v3;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapSetter;
+import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.reactivex.Single;
 import io.vertx.core.Handler;
+import io.vertx.kafka.client.consumer.KafkaConsumerRecord;
 import io.vertx.kafka.client.consumer.KafkaConsumerRecords;
+import io.vertx.kafka.client.producer.KafkaHeader;
 import io.vertx.kafka.client.producer.RecordMetadata;
+import io.vertx.reactivex.kafka.client.consumer.KafkaConsumer;
 import io.vertx.reactivex.kafka.client.producer.KafkaProducer;
 import io.vertx.reactivex.kafka.client.producer.KafkaProducerRecord;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Iterator;
+import java.util.List;
 
 /**
  * Utility for adding OpenTelemetry tracing to Vert.x 3 Kafka producers and consumers.
@@ -59,6 +70,35 @@ public final class KafkaTracing {
     @SuppressWarnings("rawtypes")
     private static final TextMapSetter<KafkaProducerRecord> RECORD_SETTER =
             (record, key, value) -> record.addHeader(key, value);
+
+    /**
+     * {@link TextMapGetter} that extracts trace context from Kafka consumer record headers.
+     * Used to extract the producer's {@code traceparent} and add it as a
+     * {@link io.opentelemetry.api.trace.SpanContext} link on the CONSUMER span.
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final TextMapGetter<KafkaConsumerRecord> RECORD_GETTER =
+            new TextMapGetter<KafkaConsumerRecord>() {
+                @Override
+                public Iterable<String> keys(KafkaConsumerRecord record) {
+                    List<String> keys = new java.util.ArrayList<>();
+                    for (KafkaHeader h : (List<KafkaHeader>) record.headers()) {
+                        keys.add(h.key());
+                    }
+                    return keys;
+                }
+
+                @Override
+                public String get(KafkaConsumerRecord record, String key) {
+                    if (record == null) return null;
+                    for (KafkaHeader h : (List<KafkaHeader>) record.headers()) {
+                        if (key.equals(h.key())) {
+                            return new String(h.value().getBytes(), StandardCharsets.UTF_8);
+                        }
+                    }
+                    return null;
+                }
+            };
 
     private KafkaTracing() {
         // Utility class
@@ -126,6 +166,7 @@ public final class KafkaTracing {
      * @param openTelemetry  the OpenTelemetry instance to use
      * @return a wrapped handler that creates and ends a CONSUMER span around each batch
      */
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public static <K, V> Handler<KafkaConsumerRecords<K, V>> tracedBatchHandler(
             String topic,
             String consumerGroup,
@@ -133,7 +174,12 @@ public final class KafkaTracing {
             OpenTelemetry openTelemetry) {
         Tracer tracer = openTelemetry.getTracer(TRACER_NAME);
         return records -> {
+            // Use Context.root() as parent to prevent leaked HTTP SERVER span context from
+            // polluting Kafka consumer spans (same fix as TracedRouter for HTTP handlers).
+            // Consumer spans are root spans per OTel messaging semconv — they link to producers
+            // via SpanLink rather than parent/child to model the async relationship accurately.
             var spanBuilder = tracer.spanBuilder(topic + " process")
+                    .setParent(Context.root())
                     .setSpanKind(SpanKind.CONSUMER)
                     .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
                     .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, topic)
@@ -147,13 +193,149 @@ public final class KafkaTracing {
                         consumerGroup);
             }
 
+            // Add a SpanLink for each record that carries a traceparent header.
+            // This connects the consumer span to the producer span(s) without making it
+            // a child — correct for async messaging where producer and consumer are decoupled.
+            for (int i = 0; i < records.size(); i++) {
+                KafkaConsumerRecord record = records.recordAt(i);
+                Context producerCtx = openTelemetry.getPropagators().getTextMapPropagator()
+                        .extract(Context.root(), record, RECORD_GETTER);
+                SpanContext producerSpanCtx = Span.fromContext(producerCtx).getSpanContext();
+                if (producerSpanCtx.isValid()) {
+                    spanBuilder.addLink(producerSpanCtx);
+                }
+            }
+
             Span span = spanBuilder.startSpan();
             try (Scope ignored = span.makeCurrent()) {
                 delegate.handle(records);
             } catch (Throwable t) {
-                span.recordException(t);
+                span.recordException(t,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
                 throw t;
+            } finally {
+                span.end();
+            }
+        };
+    }
+
+    // ---- Consumer setup convenience methods ----
+
+    /**
+     * Wires a traced Kafka consumer with a single call using {@link GlobalOpenTelemetry}.
+     *
+     * <p>Equivalent to the following boilerplate:
+     * <pre>{@code
+     * consumer.getDelegate().batchHandler(
+     *         KafkaTracing.tracedBatchHandler(topic, batchHandler));
+     * consumer.exceptionHandler(KafkaTracing.tracedExceptionHandler(topic));
+     * consumer.handler(record -> {});  // required to start polling
+     * consumer.subscribe(topic);
+     * }</pre>
+     *
+     * @param <K>          Kafka record key type
+     * @param <V>          Kafka record value type
+     * @param consumer     the Kafka consumer to configure
+     * @param topic        the topic to subscribe to
+     * @param batchHandler the handler invoked for each batch of records
+     */
+    public static <K, V> void setupConsumer(
+            KafkaConsumer<K, V> consumer,
+            String topic,
+            Handler<KafkaConsumerRecords<K, V>> batchHandler) {
+        setupConsumer(consumer, topic, null, batchHandler, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wires a traced Kafka consumer with consumer group in span attributes using
+     * {@link GlobalOpenTelemetry}.
+     *
+     * @param <K>           Kafka record key type
+     * @param <V>           Kafka record value type
+     * @param consumer      the Kafka consumer to configure
+     * @param topic         the topic to subscribe to
+     * @param consumerGroup the consumer group name (set as {@code messaging.kafka.consumer.group})
+     * @param batchHandler  the handler invoked for each batch of records
+     */
+    public static <K, V> void setupConsumer(
+            KafkaConsumer<K, V> consumer,
+            String topic,
+            String consumerGroup,
+            Handler<KafkaConsumerRecords<K, V>> batchHandler) {
+        setupConsumer(consumer, topic, consumerGroup, batchHandler, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wires a traced Kafka consumer with explicit {@link OpenTelemetry} instance.
+     *
+     * <p>Sets up all four required pieces in one call:
+     * <ol>
+     *   <li>A traced batch handler (CONSUMER span per poll)</li>
+     *   <li>A traced exception handler (ERROR span for infrastructure errors)</li>
+     *   <li>A no-op per-record handler (required by Vert.x to start polling)</li>
+     *   <li>Subscription to the topic</li>
+     * </ol>
+     *
+     * @param <K>            Kafka record key type
+     * @param <V>            Kafka record value type
+     * @param consumer       the Kafka consumer to configure
+     * @param topic          the topic to subscribe to
+     * @param consumerGroup  the consumer group name (nullable)
+     * @param batchHandler   the handler invoked for each batch of records
+     * @param openTelemetry  the OpenTelemetry instance to use
+     */
+    public static <K, V> void setupConsumer(
+            KafkaConsumer<K, V> consumer,
+            String topic,
+            String consumerGroup,
+            Handler<KafkaConsumerRecords<K, V>> batchHandler,
+            OpenTelemetry openTelemetry) {
+        consumer.getDelegate().batchHandler(
+                tracedBatchHandler(topic, consumerGroup, batchHandler, openTelemetry));
+        consumer.exceptionHandler(tracedExceptionHandler(topic, openTelemetry));
+        consumer.handler(record -> {});
+        consumer.subscribe(topic);
+    }
+
+    // ---- Consumer exception handler ----
+
+    /**
+     * Returns a Vert.x {@code Handler<Throwable>} suitable for use with
+     * {@link io.vertx.reactivex.kafka.client.consumer.KafkaConsumer#exceptionHandler}.
+     *
+     * <p>Infrastructure-level consumer errors (broker unreachable, deserialization failures,
+     * authentication errors) are delivered via the exception handler, NOT via the batch handler.
+     * Without this, those errors produce no span and no log correlation.
+     *
+     * <p>For each error, this handler creates a short-lived CONSUMER span with:
+     * <ul>
+     *   <li>{@code messaging.system} = "kafka"</li>
+     *   <li>{@code messaging.destination.name} = topic</li>
+     *   <li>span status = ERROR</li>
+     *   <li>exception event with the full stack trace</li>
+     * </ul>
+     *
+     * @param topic         the topic the consumer is subscribed to
+     * @param openTelemetry the OpenTelemetry instance to use
+     * @return a {@code Handler<Throwable>} that creates an ERROR span for each consumer error
+     */
+    public static Handler<Throwable> tracedExceptionHandler(
+            String topic,
+            OpenTelemetry openTelemetry) {
+        Tracer tracer = openTelemetry.getTracer(TRACER_NAME);
+        return err -> {
+            Span span = tracer.spanBuilder(topic + " error")
+                    .setSpanKind(SpanKind.CONSUMER)
+                    .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
+                    .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, topic)
+                    .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
+                            SemanticAttributes.MessagingOperationValues.PROCESS)
+                    .startSpan();
+            try (Scope ignored = span.makeCurrent()) {
+                span.recordException(err,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                span.setStatus(StatusCode.ERROR, err.getMessage());
             } finally {
                 span.end();
             }
@@ -208,6 +390,19 @@ public final class KafkaTracing {
             KafkaProducer<K, V> producer,
             KafkaProducerRecord<K, V> record,
             OpenTelemetry openTelemetry) {
+        return tracedSend(record, producer.rxSend(record), openTelemetry);
+    }
+
+    /**
+     * Package-private overload that accepts a pre-built {@code Single<RecordMetadata>}.
+     * Separates span lifecycle from the producer call, making the logic testable without
+     * a real Kafka broker.
+     */
+    @SuppressWarnings("unchecked")
+    static <K, V> Single<RecordMetadata> tracedSend(
+            KafkaProducerRecord<K, V> record,
+            Single<RecordMetadata> sendSingle,
+            OpenTelemetry openTelemetry) {
         Tracer tracer = openTelemetry.getTracer(TRACER_NAME);
         Span span = tracer.spanBuilder(record.topic() + " publish")
                 .setSpanKind(SpanKind.PRODUCER)
@@ -222,36 +417,43 @@ public final class KafkaTracing {
                     String.valueOf(record.key()));
         }
 
-        // Check for tombstone (null value)
         if (record.value() == null) {
             span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_TOMBSTONE, true);
         }
 
-        // If a specific partition was requested, set it before send
         if (record.partition() != null) {
             span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
                     (long) record.partition());
         }
 
-        // Inject trace context into Kafka record headers for consumer correlation
+        // Inject trace context into record headers so consumers can link their spans
         Context spanContext = Context.current().with(span);
         openTelemetry.getPropagators().getTextMapPropagator()
                 .inject(spanContext, record, RECORD_SETTER);
 
         try (Scope ignored = span.makeCurrent()) {
-            return producer.rxSend(record)
+            return sendSingle
                     .doOnSuccess(metadata -> {
+                        // Set partition/offset attributes once confirmed by the broker
                         span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
                                 (long) metadata.getPartition());
                         span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_OFFSET,
                                 metadata.getOffset());
-                        span.end();
                     })
                     .doOnError(err -> {
-                        span.recordException(err);
+                        span.recordException(err,
+                                Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                         span.setStatus(StatusCode.ERROR, err.getMessage());
-                        span.end();
-                    });
+                    })
+                    // doFinally guarantees span.end() on success, error, AND disposal/cancellation
+                    .doFinally(span::end);
+        } catch (Throwable t) {
+            // sendSingle construction itself threw (e.g. closed producer, serialization error)
+            span.recordException(t,
+                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+            span.setStatus(StatusCode.ERROR, t.getMessage());
+            span.end();
+            throw t;
         }
     }
 }

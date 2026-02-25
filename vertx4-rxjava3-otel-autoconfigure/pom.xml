@@ -73,6 +73,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Vert.x PostgreSQL / reactive SQL client (provided - app will have this) -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-pg-client</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Logback (provided via core, needed at test time for MdcTraceTurboFilter tests) -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
@@ -138,6 +145,10 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
             </plugin>
         </plugins>
     </build>
