@@ -69,6 +69,15 @@
             <version>${opentelemetry-instrumentation.version}-alpha</version>
         </dependency>
 
+        <!-- Process/host/OS resource providers (process.pid, host.name, os.type, etc.).
+             Registers ProcessResourceProvider, HostResourceProvider, OsResourceProvider via SPI
+             so autoconfigure picks them up without manual attribute building. -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-resources</artifactId>
+            <version>${opentelemetry-instrumentation.version}-alpha</version>
+        </dependency>
+
         <!-- AWS resource detectors: EC2, ECS, EKS, Lambda, Elastic Beanstalk.
              Registered via SPI — autoconfigure picks them up automatically.
              Makes short HTTP calls to IMDS at startup; silently skips if not on AWS. -->
