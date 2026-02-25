@@ -285,59 +285,6 @@ Vert.x 4 handles outgoing HTTP propagation automatically for any client created 
 
 ## Troubleshooting
 
-### NoClassDefFoundError: okhttp3/Interceptor
-
-```
-Exception in thread "main" java.lang.NoClassDefFoundError: okhttp3/Interceptor
-    at io.opentelemetry.exporter.sender.okhttp.internal.OkHttpGrpcSenderProvider.createSender
-```
-
-**Cause**: The OTel OTLP exporter defaults to gRPC protocol, which requires OkHttp3 at runtime. OkHttp3 is bundled in the OTel Java agent but is not bundled in this library — it lives in a different Maven groupId (`com.squareup.okhttp3`) and was not included in the fat JAR.
-
-**Fix**: Upgrade to `v1.3.0` or later. The library now bundles `opentelemetry-exporter-sender-jdk` (uses Java 11's built-in `HttpClient`) and defaults `OTEL_EXPORTER_OTLP_PROTOCOL` to `http/protobuf`, which requires no extra dependencies. All standard OTLP backends (Last9, Grafana, Datadog, Jaeger) support HTTP/protobuf.
-
-If you explicitly need gRPC (`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`), add OkHttp3 to your own application's classpath:
-```xml
-<dependency>
-    <groupId>com.squareup.okhttp3</groupId>
-    <artifactId>okhttp</artifactId>
-    <version>4.12.0</version>
-</dependency>
-```
-
-### ClassNotFoundException / NoClassDefFoundError: OtelSdkSetup
-
-```
-Exception in thread "main" java.lang.NoClassDefFoundError: io/last9/tracing/otel/OtelSdkSetup
-Caused by: java.lang.ClassNotFoundException: io.last9.tracing.otel.OtelSdkSetup
-```
-
-**Cause**: You are using a JAR built before version 1.3.0-beta.3. Earlier JARs were thin — `OtelSdkSetup` and `MdcTraceTurboFilter` lived in a separate `vertx-otel-core` artifact that was pulled in as a Maven transitive dependency. When installed manually via `mvn install:install-file -DgeneratePom=true`, the generated POM has no dependencies, so `vertx-otel-core` is never resolved and the class is missing at runtime.
-
-**Fix**: Download `v1.3.0` from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases). The JAR is fully self-contained — `vertx-otel-core`, the full OpenTelemetry SDK, and all instrumentation are bundled inside the single JAR. No separate `vertx-otel-core` dependency is needed.
-
-You can verify a JAR is self-contained before installing it:
-
-```bash
-jar -tf vertx3-rxjava2-otel-autoconfigure-1.4.0.jar | grep OtelSdkSetup
-# Should print: io/last9/tracing/otel/OtelSdkSetup.class
-```
-
-If nothing is printed, the JAR is the old thin version — upgrade.
-
-### All requests appear in one giant trace (cascading spans)
-
-If every HTTP request on the same event-loop thread shows up as part of a single cascading trace
-instead of independent traces per request, you are likely using a version older than 1.3.0.
-
-**Cause**: Vert.x 3 runs all handlers on a single event-loop thread. Earlier versions of
-`TracedRouter` used `Context.current()` to extract `traceparent`, which meant each new request
-inherited the previous request's span context from the thread-local.
-
-**Fix**: Upgrade to the latest version. `TracedRouter` now uses `Context.root()` so each
-incoming request starts with a clean context. If a valid `traceparent` header is present, it is
-honoured; otherwise the request starts a fresh root trace.
-
 ### Disconnected Traces
 
 If your outgoing calls show up as separate root traces instead of being connected to the incoming
