@@ -4,21 +4,29 @@ import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapSetter;
 import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.reactivex.Single;
 import io.vertx.core.Handler;
+import io.vertx.kafka.client.consumer.KafkaConsumerRecord;
 import io.vertx.kafka.client.consumer.KafkaConsumerRecords;
+import io.vertx.kafka.client.producer.KafkaHeader;
 import io.vertx.kafka.client.producer.RecordMetadata;
 import io.vertx.reactivex.kafka.client.consumer.KafkaConsumer;
 import io.vertx.reactivex.kafka.client.producer.KafkaProducer;
 import io.vertx.reactivex.kafka.client.producer.KafkaProducerRecord;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Iterator;
+import java.util.List;
 
 /**
  * Utility for adding OpenTelemetry tracing to Vert.x 3 Kafka producers and consumers.
@@ -62,6 +70,35 @@ public final class KafkaTracing {
     @SuppressWarnings("rawtypes")
     private static final TextMapSetter<KafkaProducerRecord> RECORD_SETTER =
             (record, key, value) -> record.addHeader(key, value);
+
+    /**
+     * {@link TextMapGetter} that extracts trace context from Kafka consumer record headers.
+     * Used to extract the producer's {@code traceparent} and add it as a
+     * {@link io.opentelemetry.api.trace.SpanContext} link on the CONSUMER span.
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final TextMapGetter<KafkaConsumerRecord> RECORD_GETTER =
+            new TextMapGetter<KafkaConsumerRecord>() {
+                @Override
+                public Iterable<String> keys(KafkaConsumerRecord record) {
+                    List<String> keys = new java.util.ArrayList<>();
+                    for (KafkaHeader h : (List<KafkaHeader>) record.headers()) {
+                        keys.add(h.key());
+                    }
+                    return keys;
+                }
+
+                @Override
+                public String get(KafkaConsumerRecord record, String key) {
+                    if (record == null) return null;
+                    for (KafkaHeader h : (List<KafkaHeader>) record.headers()) {
+                        if (key.equals(h.key())) {
+                            return new String(h.value().getBytes(), StandardCharsets.UTF_8);
+                        }
+                    }
+                    return null;
+                }
+            };
 
     private KafkaTracing() {
         // Utility class
@@ -129,6 +166,7 @@ public final class KafkaTracing {
      * @param openTelemetry  the OpenTelemetry instance to use
      * @return a wrapped handler that creates and ends a CONSUMER span around each batch
      */
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public static <K, V> Handler<KafkaConsumerRecords<K, V>> tracedBatchHandler(
             String topic,
             String consumerGroup,
@@ -136,7 +174,12 @@ public final class KafkaTracing {
             OpenTelemetry openTelemetry) {
         Tracer tracer = openTelemetry.getTracer(TRACER_NAME);
         return records -> {
+            // Use Context.root() as parent to prevent leaked HTTP SERVER span context from
+            // polluting Kafka consumer spans (same fix as TracedRouter for HTTP handlers).
+            // Consumer spans are root spans per OTel messaging semconv — they link to producers
+            // via SpanLink rather than parent/child to model the async relationship accurately.
             var spanBuilder = tracer.spanBuilder(topic + " process")
+                    .setParent(Context.root())
                     .setSpanKind(SpanKind.CONSUMER)
                     .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
                     .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, topic)
@@ -148,6 +191,19 @@ public final class KafkaTracing {
             if (consumerGroup != null) {
                 spanBuilder.setAttribute(SemanticAttributes.MESSAGING_KAFKA_CONSUMER_GROUP,
                         consumerGroup);
+            }
+
+            // Add a SpanLink for each record that carries a traceparent header.
+            // This connects the consumer span to the producer span(s) without making it
+            // a child — correct for async messaging where producer and consumer are decoupled.
+            for (int i = 0; i < records.size(); i++) {
+                KafkaConsumerRecord record = records.recordAt(i);
+                Context producerCtx = openTelemetry.getPropagators().getTextMapPropagator()
+                        .extract(Context.root(), record, RECORD_GETTER);
+                SpanContext producerSpanCtx = Span.fromContext(producerCtx).getSpanContext();
+                if (producerSpanCtx.isValid()) {
+                    spanBuilder.addLink(producerSpanCtx);
+                }
             }
 
             Span span = spanBuilder.startSpan();
