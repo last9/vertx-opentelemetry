@@ -463,9 +463,13 @@ SQLClient client = TracedSQLClient.wrap(JDBCClient.createShared(vertx, config), 
 client.rxQueryWithParams("SELECT * FROM orders WHERE id = ?", params)
     .subscribe(resultSet -> { ... });
 
-// Connections are also auto-traced:
+// Connections obtained via rxGetConnection() are also fully auto-traced.
+// All operations on the connection produce CLIENT spans: query, update,
+// call (stored procedures), execute (DDL), batch, COMMIT, and ROLLBACK.
+// Lifecycle operations (setAutoCommit, close) do not produce spans.
 client.rxGetConnection()
-    .flatMap(conn -> conn.rxQuery("SELECT 1").doFinally(conn::close))
+    .flatMap(conn -> conn.rxQuery("SELECT 1")
+        .doFinally(conn::close))
     .subscribe(...);
 ```
 
@@ -500,10 +504,10 @@ mysql.unwrap().withTransaction(conn -> ...);
 > For the legacy async MySQL client (`vertx-mysql-postgresql-client`) that implements
 > `io.vertx.ext.sql.SQLClient`, use `TracedSQLClient` instead (see below).
 
-**SQL (legacy `SQLClient` — MySQL / PostgreSQL):**
+**Redis:**
 
 ```java
-import io.last9.tracing.otel.v3.TracedSQLClient;
+import io.last9.tracing.otel.v3.TracedRedisClient;
 
 // Instead of: RedisAPI redis = RedisAPI.api(connection);
 RedisAPI redis = TracedRedisClient.wrap(RedisAPI.api(connection), "0");
@@ -611,6 +615,49 @@ TracedRxClient.wrap(client, MysqlClient.class, "mysql", "orders_db",
         (method, args) -> method.getName() + " " + args[0]);
 // Span name: "mysql rxQuery SELECT * FROM users"
 ```
+
+## Vert.x 3: Span Name Updater
+
+`TracedRouter` already sets route-pattern span names (e.g., `GET /v1/users/:id`) automatically.
+`SpanNameUpdater` is available for cases where you manage spans manually and want the same
+behaviour — for example, if you create SERVER spans yourself without using `TracedRouter`.
+
+### Per-route: updateSpanName handler
+
+Add `SpanNameUpdater::updateSpanName` as the first handler on a route. It reads the matched route
+pattern from the routing context, updates the current span's name, and sets the `http.route`
+attribute before calling `ctx.next()`:
+
+```java
+import io.last9.tracing.otel.v3.SpanNameUpdater;
+
+router.get("/v1/users/:id")
+    .handler(SpanNameUpdater::updateSpanName)   // updates span name to "GET /v1/users/:id"
+    .handler(myHandler);
+```
+
+### Router-wide: addToAllRoutes
+
+`addToAllRoutes()` installs two global handlers on the router:
+
+1. A high-priority (`order -1000`) handler that captures the active span and attaches a
+   `headersEndHandler` — fired when the response is sent — that updates the span name with the
+   matched route pattern and sets `http.route` and `http.response.status_code`.
+2. A low-priority handler that captures the matched route path for the `headersEndHandler` to use.
+
+```java
+import io.last9.tracing.otel.v3.SpanNameUpdater;
+
+Router router = Router.router(vertx);
+SpanNameUpdater.addToAllRoutes(router);  // call before defining routes
+
+router.get("/v1/orders/:orderId").handler(ctx -> {
+    // Span name will be updated to "GET /v1/orders/:orderId" when the response is sent
+    ctx.response().end(payload);
+});
+```
+
+5xx responses also set the span status to `ERROR` via `addToAllRoutes`.
 
 ## Vert.x 3: Worker Thread Context Propagation
 
