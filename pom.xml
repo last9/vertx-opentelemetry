@@ -50,10 +50,16 @@
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <!-- OpenTelemetry -->
-        <opentelemetry.version>1.35.0</opentelemetry.version>
+        <!-- OpenTelemetry — SDK + instrumentation versions must be aligned.
+             opentelemetry-instrumentation-bom:2.4.0 was built against SDK 1.38.0;
+             mixing SDK 1.35.0 with instrumentation 2.4.0 causes AbstractMethodError
+             because HttpSenderProvider interface changed between 1.35.0 and 1.38.0. -->
+        <opentelemetry.version>1.38.0</opentelemetry.version>
         <opentelemetry-instrumentation.version>2.4.0</opentelemetry-instrumentation.version>
-        <opentelemetry-semconv.version>1.23.1-alpha</opentelemetry-semconv.version>
+        <opentelemetry-semconv.version>1.25.0-alpha</opentelemetry-semconv.version>
+        <!-- OTel contrib resource detectors (AWS, GCP) — version must align with SDK 1.38.0.
+             Contrib follows SDK versioning minus 2 minor versions: 38-2 = 36. -->
+        <opentelemetry-contrib.version>1.36.0-alpha</opentelemetry-contrib.version>
 
         <!-- Vert.x -->
         <vertx4.version>4.5.10</vertx4.version>
@@ -176,6 +182,75 @@
                             <goals>
                                 <goal>jar</goal>
                             </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-shade-plugin</artifactId>
+                    <version>3.5.1</version>
+                    <executions>
+                        <execution>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>shade</goal>
+                            </goals>
+                            <configuration>
+                                <!-- Replace the main JAR in-place; no -shaded suffix.
+                                     createDependencyReducedPom=true (the default) is intentional:
+                                     the shade plugin installs dependency-reduced-pom.xml so that
+                                     consumers do NOT see the bundled OTel deps (esp.
+                                     opentelemetry-exporter-sender-okhttp) leaking onto their
+                                     classpath. Without this, Maven pulls the transitive JAR onto
+                                     the consumer's classpath alongside our shaded copy, causing a
+                                     "Multiple HttpSenderProvider found" error at startup. -->
+                                <shadedArtifactAttached>false</shadedArtifactAttached>
+                                <!-- Keep the reduced POM so Maven consumers don't see bundled deps -->
+                                <createDependencyReducedPom>true</createDependencyReducedPom>
+                                <!-- Bundle vertx-otel-core plus all OTel SDK, exporter,
+                                     instrumentation, and semconv artifacts so the JAR is
+                                     self-contained. Vert.x, RxJava, Logback, and SLF4J are
+                                     kept as provided — the user's app always supplies those. -->
+                                <artifactSet>
+                                    <includes>
+                                        <include>io.last9:vertx-otel-core</include>
+                                        <include>io.opentelemetry:*</include>
+                                        <include>io.opentelemetry.semconv:*</include>
+                                        <include>io.opentelemetry.instrumentation:*</include>
+                                        <!-- AWS + GCP cloud resource detectors -->
+                                        <include>io.opentelemetry.contrib:opentelemetry-aws-resources</include>
+                                        <include>io.opentelemetry.contrib:opentelemetry-gcp-resources</include>
+                                        <!-- GCP detector support library (transitive of gcp-resources) -->
+                                        <include>com.google.cloud.opentelemetry:detector-resources-support</include>
+                                        <!-- OkHttp + Okio: required by opentelemetry-aws-resources
+                                             (Ec2Resource calls IMDS via OkHttpClient).
+                                             We bundle the okhttp library itself but still exclude
+                                             opentelemetry-exporter-sender-okhttp so that
+                                             OkHttpHttpSenderProvider is NOT registered as an OTLP
+                                             HttpSenderProvider — only JdkHttpSenderProvider is. -->
+                                        <include>com.squareup.okhttp3:okhttp</include>
+                                        <include>com.squareup.okio:okio</include>
+                                        <include>com.squareup.okio:okio-jvm</include>
+                                        <!-- OkHttp 4.x is written in Kotlin — runtime required -->
+                                        <include>org.jetbrains.kotlin:kotlin-stdlib</include>
+                                        <include>org.jetbrains.kotlin:kotlin-stdlib-jdk7</include>
+                                        <include>org.jetbrains.kotlin:kotlin-stdlib-jdk8</include>
+                                    </includes>
+                                    <!-- Exclude the OkHttp-based OTel sender: its SPI file would
+                                         register OkHttpHttpSenderProvider alongside JdkHttpSenderProvider
+                                         causing a "Multiple HttpSenderProvider found" error at startup.
+                                         We still bundle okhttp3 itself (above) for the AWS detector. -->
+                                    <excludes>
+                                        <exclude>io.opentelemetry:opentelemetry-exporter-sender-okhttp</exclude>
+                                    </excludes>
+                                </artifactSet>
+                                <transformers>
+                                    <!-- Merge META-INF/services SPI files from all bundled JARs.
+                                         Without this, only one ResourceProvider set survives shading
+                                         and cloud/K8s detectors registered by contrib JARs are lost. -->
+                                    <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                </transformers>
+                            </configuration>
                         </execution>
                     </executions>
                 </plugin>

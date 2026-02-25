@@ -44,9 +44,20 @@ public class TracedRedisClient extends RedisAPI {
 
     /**
      * Wraps an existing {@link RedisAPI} with tracing using {@link GlobalOpenTelemetry}.
+     * The {@code db.name} attribute is omitted from spans.
+     *
+     * @param redisAPI the existing RedisAPI to wrap
+     * @return a RedisAPI that auto-instruments common commands with CLIENT spans
+     */
+    public static TracedRedisClient wrap(RedisAPI redisAPI) {
+        return wrap(redisAPI, null, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Wraps an existing {@link RedisAPI} with tracing using {@link GlobalOpenTelemetry}.
      *
      * @param redisAPI    the existing RedisAPI to wrap
-     * @param dbNamespace the Redis database index or namespace (e.g., "0")
+     * @param dbNamespace the Redis database index or namespace (e.g., "0"); may be {@code null}
      * @return a RedisAPI that auto-instruments common commands with CLIENT spans
      */
     public static TracedRedisClient wrap(RedisAPI redisAPI, String dbNamespace) {
@@ -55,10 +66,22 @@ public class TracedRedisClient extends RedisAPI {
 
     /**
      * Wraps an existing {@link RedisAPI} with tracing using the supplied {@link OpenTelemetry}.
+     * The {@code db.name} attribute is omitted from spans. Useful in tests.
+     *
+     * @param redisAPI      the existing RedisAPI to wrap
+     * @param openTelemetry the OpenTelemetry instance to use
+     * @return a RedisAPI that auto-instruments common commands with CLIENT spans
+     */
+    public static TracedRedisClient wrap(RedisAPI redisAPI, OpenTelemetry openTelemetry) {
+        return wrap(redisAPI, null, openTelemetry);
+    }
+
+    /**
+     * Wraps an existing {@link RedisAPI} with tracing using the supplied {@link OpenTelemetry}.
      * Useful in tests.
      *
      * @param redisAPI      the existing RedisAPI to wrap
-     * @param dbNamespace   the Redis database index or namespace
+     * @param dbNamespace   the Redis database index or namespace; may be {@code null} to omit
      * @param openTelemetry the OpenTelemetry instance to use
      * @return a RedisAPI that auto-instruments common commands with CLIENT spans
      */

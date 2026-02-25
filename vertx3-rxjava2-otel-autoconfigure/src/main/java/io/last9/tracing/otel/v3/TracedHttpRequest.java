@@ -1,12 +1,14 @@
 package io.last9.tracing.otel.v3;
 
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.reactivex.Single;
 import io.vertx.core.json.JsonObject;
@@ -226,7 +228,8 @@ class TracedHttpRequest<T> extends HttpRequest<T> {
                         span.end();
                     })
                     .doOnError(err -> {
-                        span.recordException(err);
+                        span.recordException(err,
+                                Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                         span.setStatus(StatusCode.ERROR, err.getMessage());
                         span.end();
                     })

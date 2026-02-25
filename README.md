@@ -23,6 +23,8 @@ mvn install:install-file -Dfile=vertx3-rxjava2-otel-autoconfigure-1.3.0.jar \
   -DgroupId=io.last9 -DartifactId=vertx3-rxjava2-otel-autoconfigure -Dversion=1.3.0 -Dpackaging=jar
 ```
 
+> **Self-contained JAR**: Each module JAR bundles `OtelSdkSetup` and `MdcTraceTurboFilter` from the internal `vertx-otel-core` module. You do **not** need a separate `vertx-otel-core` dependency — the single downloaded JAR is all you need.
+
 Then add to your `pom.xml`:
 
 ```xml
@@ -135,12 +137,16 @@ Logback OpenTelemetry appender installed for log export
 - **Distributed tracing** via W3C `traceparent` header propagation
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
 - **Kafka producer + consumer tracing** (Vert.x 3 + 4) — `TracedKafkaProducer` creates PRODUCER spans with `traceparent` header propagation; `TracedKafkaConsumer` creates CONSUMER spans per batch with one-line setup
-- **Database tracing** (Vert.x 3) — auto-instrumented wrappers for SQL (`TracedSQLClient`), Redis (`TracedRedisClient`), and Aerospike (`TracedAerospikeClient`), plus generic `DbTracing` for any other database
+- **Database tracing** (Vert.x 3) — auto-instrumented wrappers for reactive MySQL (`TracedMySQLClient`), legacy SQL (`TracedSQLClient`), Redis (`TracedRedisClient`), and Aerospike (`TracedAerospikeClient`), plus generic `DbTracing` for any other database
+- **Database tracing** (Vert.x 4) — `TracedDBPool` wraps any reactive SQL pool (PostgreSQL, MySQL) with CLIENT spans including the SQL statement; `DbTracing` for wrapping arbitrary operations with custom span names
 - **Generic RxJava2 client wrapping** (Vert.x 3) — `TracedRxClient.wrap()` adds CLIENT spans to any RxJava2 interface via dynamic proxy — works with any third-party MySQL/Aerospike/custom data-access client
 - **Auto-tracing WebClient** (Vert.x 3) — `TracedWebClient` creates CLIENT spans and injects `traceparent` on every outgoing request — no per-call wrapping needed
 - **Worker thread context propagation** (Vert.x 3) — `TracedVertx.rxExecuteBlocking()` carries OTel context from event loop to worker threads so blocking calls produce connected spans
 - **Log-to-trace correlation** — every log line includes `trace_id` and `span_id`, so you can jump from a log line to its trace in your observability platform
 - **Log export** — logs sent to your OTLP endpoint alongside traces, with trace context automatically attached
+- **Process / host resource attributes** — `process.pid`, `process.runtime.name`, `process.runtime.version`, `host.name`, `os.type`, `os.description` attached to every span automatically (equivalent to the OTel Java agent)
+- **JVM metrics** — `jvm.memory.used`, `jvm.gc.duration`, `jvm.thread.count`, `jvm.cpu.time` and more, exported when `OTEL_METRICS_EXPORTER=otlp` is set
+- **Exception events on spans** — when a handler calls `ctx.fail(throwable)`, the exception is recorded as a span event with `exception.type`, `exception.message`, and `exception.stacktrace`
 
 ## Log-to-Trace Correlation
 
@@ -279,6 +285,48 @@ Vert.x 4 handles outgoing HTTP propagation automatically for any client created 
 
 ## Troubleshooting
 
+### NoClassDefFoundError: okhttp3/Interceptor
+
+```
+Exception in thread "main" java.lang.NoClassDefFoundError: okhttp3/Interceptor
+    at io.opentelemetry.exporter.sender.okhttp.internal.OkHttpGrpcSenderProvider.createSender
+```
+
+**Cause**: The OTel OTLP exporter defaults to gRPC protocol, which requires OkHttp3 at runtime. OkHttp3 is bundled in the OTel Java agent but is not bundled in this library — it lives in a different Maven groupId (`com.squareup.okhttp3`) and was not included in the fat JAR.
+
+**Fix**: Upgrade to `v1.3.0-beta.6` or later. The library now bundles `opentelemetry-exporter-sender-jdk` (uses Java 11's built-in `HttpClient`) and defaults `OTEL_EXPORTER_OTLP_PROTOCOL` to `http/protobuf`, which requires no extra dependencies. All standard OTLP backends (Last9, Grafana, Datadog, Jaeger) support HTTP/protobuf.
+
+If you explicitly need gRPC (`OTEL_EXPORTER_OTLP_PROTOCOL=grpc`), add OkHttp3 to your own application's classpath:
+```xml
+<dependency>
+    <groupId>com.squareup.okhttp3</groupId>
+    <artifactId>okhttp</artifactId>
+    <version>4.12.0</version>
+</dependency>
+```
+
+### ClassNotFoundException / NoClassDefFoundError: OtelSdkSetup
+
+```
+Exception in thread "main" java.lang.NoClassDefFoundError: io/last9/tracing/otel/OtelSdkSetup
+Caused by: java.lang.ClassNotFoundException: io.last9.tracing.otel.OtelSdkSetup
+```
+
+**Cause**: You are using a JAR built before version 1.3.0-beta.3. Earlier JARs were thin — `OtelSdkSetup` and `MdcTraceTurboFilter` lived in a separate `vertx-otel-core` artifact that was pulled in as a Maven transitive dependency. When installed manually via `mvn install:install-file -DgeneratePom=true`, the generated POM has no dependencies, so `vertx-otel-core` is never resolved and the class is missing at runtime.
+
+> **Note**: `v1.3.0-beta.2` also has this issue. Although it was intended to be the first bundled release, its published JAR is thin due to a CI race condition (the release was already published before the bundling commit was tagged). Use `v1.3.0-beta.6` or later.
+
+**Fix**: Download `v1.3.0-beta.6` or later from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases). Since 1.3.0-beta.3 the JAR is fully self-contained — `vertx-otel-core`, the full OpenTelemetry SDK, and all instrumentation are bundled inside the single JAR. No separate `vertx-otel-core` dependency is needed.
+
+You can verify a JAR is self-contained before installing it:
+
+```bash
+jar -tf vertx3-rxjava2-otel-autoconfigure-1.3.0.jar | grep OtelSdkSetup
+# Should print: io/last9/tracing/otel/OtelSdkSetup.class
+```
+
+If nothing is printed, the JAR is the old thin version — upgrade.
+
 ### All requests appear in one giant trace (cascading spans)
 
 If every HTTP request on the same event-loop thread shows up as part of a single cascading trace
@@ -321,6 +369,9 @@ If you use `OtelLauncher` as your main class, this is handled automatically. If 
 main class, you must call it yourself:
 
 ```java
+import io.last9.tracing.otel.OtelSdkSetup;
+import io.last9.tracing.otel.v3.RxJava2ContextPropagation;
+
 // In your custom launcher or main method, BEFORE deploying verticles:
 OtelSdkSetup.initialize();
 RxJava2ContextPropagation.install();  // <-- don't forget this
@@ -396,7 +447,7 @@ or `DbTracing` for manual wrapping.
 
 Swap your client creation line and every operation is traced automatically:
 
-**SQL (MySQL / PostgreSQL):**
+**SQL (legacy `SQLClient` — MySQL / PostgreSQL):**
 
 ```java
 import io.last9.tracing.otel.v3.TracedSQLClient;
@@ -405,15 +456,53 @@ import io.last9.tracing.otel.v3.TracedSQLClient;
 SQLClient client = TracedSQLClient.wrap(
         JDBCClient.createShared(vertx, config), "mysql", "orders_db");
 
+// db name is optional — omit if not known:
+SQLClient client = TracedSQLClient.wrap(JDBCClient.createShared(vertx, config), "mysql");
+
 // Every query automatically gets a CLIENT span — no manual wrapping:
 client.rxQueryWithParams("SELECT * FROM orders WHERE id = ?", params)
     .subscribe(resultSet -> { ... });
 
-// Connections are also auto-traced:
+// Connections obtained via rxGetConnection() are also fully auto-traced.
+// All operations on the connection produce CLIENT spans: query, update,
+// call (stored procedures), execute (DDL), batch, COMMIT, and ROLLBACK.
+// Lifecycle operations (setAutoCommit, close) do not produce spans.
 client.rxGetConnection()
-    .flatMap(conn -> conn.rxQuery("SELECT 1").doFinally(conn::close))
+    .flatMap(conn -> conn.rxQuery("SELECT 1")
+        .doFinally(conn::close))
     .subscribe(...);
 ```
+
+**MySQL (reactive client — `vertx-mysql-client`):**
+
+```java
+import io.last9.tracing.otel.v3.TracedMySQLClient;
+import io.vertx.reactivex.mysqlclient.MySQLPool;
+import io.vertx.reactivex.sqlclient.Tuple;
+
+// Instead of: MySQLPool pool = MySQLPool.pool(vertx, connectOptions, poolOptions);
+TracedMySQLClient mysql = TracedMySQLClient.wrap(
+        MySQLPool.pool(vertx, connectOptions, poolOptions), "orders_db");
+
+// db name is optional:
+TracedMySQLClient mysql = TracedMySQLClient.wrap(
+        MySQLPool.pool(vertx, connectOptions, poolOptions));
+
+// Every query automatically gets a CLIENT span:
+mysql.query("SELECT * FROM orders")
+    .subscribe(rows -> { ... });
+
+// Parameterised prepared query:
+mysql.preparedQuery("SELECT * FROM orders WHERE id = ?", Tuple.of(orderId))
+    .subscribe(rows -> { ... });
+
+// Use unwrap() for pool-level operations not covered above (transactions, etc.):
+mysql.unwrap().withTransaction(conn -> ...);
+```
+
+> **Note**: `TracedMySQLClient` wraps the newer reactive `MySQLPool` API (`vertx-mysql-client`).
+> For the legacy async MySQL client (`vertx-mysql-postgresql-client`) that implements
+> `io.vertx.ext.sql.SQLClient`, use `TracedSQLClient` instead (see below).
 
 **Redis:**
 
@@ -422,6 +511,9 @@ import io.last9.tracing.otel.v3.TracedRedisClient;
 
 // Instead of: RedisAPI redis = RedisAPI.api(connection);
 RedisAPI redis = TracedRedisClient.wrap(RedisAPI.api(connection), "0");
+
+// db namespace is optional:
+RedisAPI redis = TracedRedisClient.wrap(RedisAPI.api(connection));
 
 // Common commands (GET, SET, HGETALL, DEL, LPUSH, etc.) are auto-traced:
 redis.rxGet("session:abc").subscribe(response -> { ... });
@@ -433,14 +525,21 @@ redis.rxHgetall("user:42").subscribe(response -> { ... });
 ```java
 import io.last9.tracing.otel.v3.TracedAerospikeClient;
 
-// Instead of: IAerospikeClient client = new AerospikeClient("localhost", 3000);
-IAerospikeClient client = TracedAerospikeClient.wrap(
+// Instead of: AerospikeClient client = new AerospikeClient("localhost", 3000);
+TracedAerospikeClient client = TracedAerospikeClient.wrap(
         new AerospikeClient("localhost", 3000), "my-namespace");
 
+// namespace is optional:
+TracedAerospikeClient client = TracedAerospikeClient.wrap(new AerospikeClient("localhost", 3000));
+
 // Every data-plane call (get, put, delete, exists, operate, query, scanAll)
-// automatically gets a CLIENT span:
+// automatically gets a CLIENT span — same method signatures as AerospikeClient:
 Record record = client.get(null, new Key("my-namespace", "users", "user:123"));
 client.put(null, key, new Bin("name", "Alice"));
+client.delete(null, key);
+
+// For admin/lifecycle/async operations not covered above, use unwrap():
+client.unwrap().registerUdf(...);
 ```
 
 ### Option 2: Manual wrapping with DbTracing
@@ -489,6 +588,9 @@ import io.last9.tracing.otel.v3.TracedRxClient;
 MysqlClient traced = TracedRxClient.wrap(
         mysqlClient, MysqlClient.class, "mysql", "orders_db");
 
+// db name is optional:
+MysqlClient traced = TracedRxClient.wrap(mysqlClient, MysqlClient.class, "mysql");
+
 // Wrap an Aerospike client:
 AerospikeClient traced = TracedRxClient.wrap(
         aerospikeClient, AerospikeClient.class, "aerospike", "my-namespace");
@@ -513,6 +615,49 @@ TracedRxClient.wrap(client, MysqlClient.class, "mysql", "orders_db",
         (method, args) -> method.getName() + " " + args[0]);
 // Span name: "mysql rxQuery SELECT * FROM users"
 ```
+
+## Vert.x 3: Span Name Updater
+
+`TracedRouter` already sets route-pattern span names (e.g., `GET /v1/users/:id`) automatically.
+`SpanNameUpdater` is available for cases where you manage spans manually and want the same
+behaviour — for example, if you create SERVER spans yourself without using `TracedRouter`.
+
+### Per-route: updateSpanName handler
+
+Add `SpanNameUpdater::updateSpanName` as the first handler on a route. It reads the matched route
+pattern from the routing context, updates the current span's name, and sets the `http.route`
+attribute before calling `ctx.next()`:
+
+```java
+import io.last9.tracing.otel.v3.SpanNameUpdater;
+
+router.get("/v1/users/:id")
+    .handler(SpanNameUpdater::updateSpanName)   // updates span name to "GET /v1/users/:id"
+    .handler(myHandler);
+```
+
+### Router-wide: addToAllRoutes
+
+`addToAllRoutes()` installs two global handlers on the router:
+
+1. A high-priority (`order -1000`) handler that captures the active span and attaches a
+   `headersEndHandler` — fired when the response is sent — that updates the span name with the
+   matched route pattern and sets `http.route` and `http.response.status_code`.
+2. A low-priority handler that captures the matched route path for the `headersEndHandler` to use.
+
+```java
+import io.last9.tracing.otel.v3.SpanNameUpdater;
+
+Router router = Router.router(vertx);
+SpanNameUpdater.addToAllRoutes(router);  // call before defining routes
+
+router.get("/v1/orders/:orderId").handler(ctx -> {
+    // Span name will be updated to "GET /v1/orders/:orderId" when the response is sent
+    ctx.response().end(payload);
+});
+```
+
+5xx responses also set the span status to `ERROR` via `addToAllRoutes`.
 
 ## Vert.x 3: Worker Thread Context Propagation
 
@@ -651,23 +796,106 @@ Each batch produces a CONSUMER span named `{topic} process` (per OTel convention
 - `messaging.batch.message_count` = batch size
 - `messaging.kafka.consumer.group` = consumer group (if provided)
 
+**Context isolation and SpanLinks**: Per OTel messaging semantic conventions, CONSUMER spans are
+**root spans** — they do not inherit any HTTP SERVER span that may be active on the Vert.x event
+loop thread. If the incoming Kafka records carry a `traceparent` header (injected by
+`TracedKafkaProducer`), the consumer span adds a **SpanLink** pointing to the producer span instead
+of a parent/child relationship. This correctly models the async, decoupled nature of Kafka — the
+producer and consumer appear in separate but linked traces.
+
 Any traced client called inside the handler (e.g., `TracedAerospikeClient`, `TracedWebClient`,
 `DbTracing`) automatically parents under the CONSUMER span.
 
-#### Consumer: KafkaTracing.tracedBatchHandler (low-level)
+#### Consumer: KafkaTracing.setupConsumer (existing consumer)
 
-For more control over consumer creation and configuration, use `KafkaTracing.tracedBatchHandler()`
-directly:
+If you already have a `KafkaConsumer` instance (e.g., you need custom partition assignment or
+offset control), `KafkaTracing.setupConsumer()` wires all four required steps in one call:
 
 ```java
 import io.last9.tracing.otel.v3.KafkaTracing;
 
 KafkaConsumer<String, String> consumer = KafkaConsumer.create(vertx, config);
+
+// Wires batchHandler, exceptionHandler, no-op handler, and subscribe — all in one call
+KafkaTracing.setupConsumer(consumer, "orders", "my-consumer-group", records -> {
+    logger.info("Processing {} records", records.size());
+});
+```
+
+This is equivalent to the following manual wiring:
+
+```java
 consumer.getDelegate().batchHandler(KafkaTracing.tracedBatchHandler(
         topicName, "my-consumer-group", this::handleBatch, GlobalOpenTelemetry.get()));
+consumer.exceptionHandler(KafkaTracing.tracedExceptionHandler(topicName, GlobalOpenTelemetry.get()));
 consumer.handler(record -> {});  // required to start polling
 consumer.subscribe(topicName);
 ```
+
+## Vert.x 4: Database Tracing
+
+The `VertxTracer` SPI automatically traces HTTP client/server spans, but database clients
+(PostgreSQL, MySQL, etc.) do not produce spans automatically. Use `TracedPgPool` or `DbTracing`
+to add CLIENT spans with SQL-statement-level granularity.
+
+### TracedDBPool (recommended)
+
+Wraps any reactive SQL `Pool` — including `PgPool` and `MySQLPool` — and adds a CLIENT span to
+every `query()` and `preparedQuery()` call:
+
+```java
+import io.last9.tracing.otel.v4.TracedDBPool;
+import io.vertx.rxjava3.pgclient.PgPool;
+
+// PostgreSQL:
+PgPool pool = PgPool.pool(vertx, connectOptions, poolOptions);
+TracedDBPool traced = TracedDBPool.wrap(pool, "postgresql", "orders_db");
+
+// MySQL:
+MySQLPool mysqlPool = MySQLPool.pool(vertx, connectOptions, poolOptions);
+TracedDBPool tracedMysql = TracedDBPool.wrap(mysqlPool, "mysql", "orders_db");
+
+// db name is optional — omit if not relevant:
+TracedDBPool traced = TracedDBPool.wrap(pool, "postgresql");
+
+// Every query automatically gets a CLIENT span:
+traced.query("SELECT * FROM orders")
+    .subscribe(rows -> { ... });
+
+// Parameterised query:
+traced.preparedQuery("SELECT * FROM orders WHERE id = $1", Tuple.of(42))
+    .subscribe(rows -> { ... });
+
+// Use unwrap() for pool-level operations not covered above (transactions, etc.):
+traced.unwrap().withTransaction(conn -> ...);
+```
+
+Each CLIENT span includes:
+- `db.system` = the system identifier you passed (e.g. `"postgresql"`, `"mysql"`)
+- `db.statement` = the SQL string
+- `db.name` = the database name you passed to `wrap()`
+
+### DbTracing (manual / custom clients)
+
+For databases without a dedicated wrapper, or for fine-grained control over any RxJava 3 operation:
+
+```java
+import io.last9.tracing.otel.v4.DbTracing;
+
+DbTracing db = DbTracing.create("postgresql", "orders_db");
+
+db.traceSingle("SELECT * FROM orders WHERE id = $1", () ->
+        pool.preparedQuery("SELECT * FROM orders WHERE id = $1")
+            .rxExecute(Tuple.of(42)))
+    .subscribe(rows -> { ... });
+
+db.traceCompletable("DELETE FROM cache WHERE expired = true", () ->
+        pool.query("DELETE FROM cache WHERE expired = true")
+            .rxExecute().ignoreElement())
+    .subscribe();
+```
+
+---
 
 ## Pre-release / Beta Builds
 
@@ -677,9 +905,9 @@ To test unreleased changes before a full release:
 Go to [Actions](https://github.com/last9/vertx-opentelemetry/actions/workflows/ci.yaml), click a
 run, and download the `jars-<sha>` artifact.
 
-**Option 2: Beta releases** — tagged pre-releases (e.g., `v1.3.0-beta.1`) appear on the
+**Option 2: Beta releases** — tagged pre-releases appear on the
 [Releases](https://github.com/last9/vertx-opentelemetry/releases) page marked as "Pre-release"
-with downloadable JARs.
+with downloadable JARs. The latest pre-release is **`v1.3.0-beta.8`** — use this version. Known issues in earlier betas: `v1.3.0-beta.2` has a thin JAR (OTel SDK not bundled); `v1.3.0-beta.3` triggers `NoClassDefFoundError: okhttp3/Interceptor` at startup; `v1.3.0-beta.4` and `v1.3.0-beta.5` are missing `TracedAerospikeClient` and `TracedMySQLClient`; `v1.3.0-beta.6` and `v1.3.0-beta.7` have a Kafka consumer context leak (consumer spans inherit HTTP SERVER span context — fixed in `v1.3.0-beta.8`).
 
 ## Environment Variables
 
@@ -690,9 +918,17 @@ All standard [OpenTelemetry environment variables](https://opentelemetry.io/docs
 | `OTEL_SERVICE_NAME` | Service name in traces | `unknown-service` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL | `http://localhost:4318` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Auth headers (URL-encoded) | - |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` | HTTP client timeout per export (ms) | `10000` |
 | `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes | - |
 | `OTEL_LOGS_EXPORTER` | Log exporter (`otlp` / `none`) | `otlp` |
+| `OTEL_METRICS_EXPORTER` | Metrics exporter (`otlp` / `none`) | `otlp` |
 | `OTEL_TRACES_SAMPLER` | Sampling strategy | `parentbased_always_on` |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Metrics push interval (ms) | `60000` |
+| `OTEL_BSP_SCHEDULE_DELAY` | Span batch export interval (ms) | `5000` |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | Max spans per export request | `512` |
+
+> **Tip:** When exporting to a remote OTLP backend, set `OTEL_EXPORTER_OTLP_TIMEOUT=30000`
+> to avoid timeout errors on the first metrics export (which contains all JVM metric streams).
 
 ## Why Not the OTel Java Agent?
 

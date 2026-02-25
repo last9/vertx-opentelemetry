@@ -1,4 +1,4 @@
-package io.last9.tracing.otel.v3;
+package io.last9.tracing.otel.v4;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
@@ -10,32 +10,34 @@ import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
-import io.reactivex.Completable;
-import io.reactivex.Maybe;
-import io.reactivex.Single;
+import io.reactivex.rxjava3.core.Completable;
+import io.reactivex.rxjava3.core.Maybe;
+import io.reactivex.rxjava3.core.Single;
 
 import java.util.function.Supplier;
 
 /**
- * Utility for adding OpenTelemetry tracing to database operations in Vert.x 3 applications.
+ * Utility for adding OpenTelemetry tracing to database operations in Vert.x 4 applications.
  *
- * <p>Vert.x 3 has no {@code VertxTracer} SPI, so database clients (MySQL, Aerospike, etc.)
- * produce no spans automatically. This utility wraps RxJava 2 database operations with a
- * CLIENT span that captures {@code db.system}, {@code db.statement}, and {@code db.name}
- * using OpenTelemetry semantic conventions.
+ * <p>Vert.x 4's {@code VertxTracer} SPI automatically traces HTTP client/server spans, but
+ * database clients (PostgreSQL pool, MySQL, Aerospike, etc.) produce no spans automatically.
+ * This utility wraps RxJava 3 database operations with a CLIENT span that captures
+ * {@code db.system}, {@code db.statement}, and {@code db.name} using OpenTelemetry
+ * semantic conventions.
  *
  * <p>Works with any database client — no dependency on a specific driver.
  *
- * <h2>Usage with MySQL</h2>
+ * <h2>Usage with PostgreSQL</h2>
  * <pre>{@code
- * DbTracing db = DbTracing.create("mysql", "orders_db");
+ * DbTracing db = DbTracing.create("postgresql", "orders_db");
  *
- * db.traceSingle("SELECT * FROM orders WHERE id = ?", () ->
- *         sqlClient.rxQueryWithParams("SELECT * FROM orders WHERE id = ?", params))
- *     .subscribe(resultSet -> { ... });
+ * db.traceSingle("SELECT * FROM orders WHERE id = $1", () ->
+ *         pool.preparedQuery("SELECT * FROM orders WHERE id = $1")
+ *             .rxExecute(Tuple.of(42)))
+ *     .subscribe(rows -> { ... });
  * }</pre>
  *
- * <h2>Usage with Aerospike</h2>
+ * <h2>Usage with a custom client</h2>
  * <pre>{@code
  * DbTracing db = DbTracing.create("aerospike", "my-namespace");
  *
@@ -44,12 +46,11 @@ import java.util.function.Supplier;
  *     .subscribe(record -> { ... });
  * }</pre>
  *
- * @see TracedRouter
- * @see ClientTracing
+ * @see TracedPgPool for the ready-made PostgreSQL pool wrapper
  */
 public final class DbTracing {
 
-    private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
+    private static final String TRACER_NAME = "io.last9.tracing.otel.v4";
 
     private final String dbSystem;
     private final String dbNamespace;
@@ -62,13 +63,11 @@ public final class DbTracing {
     }
 
     /**
-     * Creates a {@code DbTracing} instance for the given database system and namespace.
+     * Creates a {@code DbTracing} instance using {@link GlobalOpenTelemetry}.
+     * Suitable for production use after {@link OtelLauncher} has initialised the SDK.
      *
-     * <p>Uses {@link GlobalOpenTelemetry#get()} — suitable for production use after
-     * {@link OtelLauncher} has initialised the SDK.
-     *
-     * @param dbSystem   the database system identifier (e.g., "mysql", "aerospike", "postgresql")
-     * @param dbNamespace the database or namespace name (e.g., "orders_db", "my-namespace")
+     * @param dbSystem    the database system identifier (e.g., "postgresql", "mysql")
+     * @param dbNamespace the database name (e.g., "orders_db"); may be {@code null} to omit
      * @return a new {@code DbTracing} instance
      */
     public static DbTracing create(String dbSystem, String dbNamespace) {
@@ -80,7 +79,7 @@ public final class DbTracing {
      * Useful in tests that construct their own {@code OpenTelemetrySdk}.
      *
      * @param dbSystem      the database system identifier
-     * @param dbNamespace   the database or namespace name
+     * @param dbNamespace   the database name; may be {@code null} to omit
      * @param openTelemetry the OpenTelemetry instance to use
      * @return a new {@code DbTracing} instance
      */
@@ -90,15 +89,12 @@ public final class DbTracing {
     }
 
     /**
-     * Wraps an RxJava {@link Single} database operation with a CLIENT span.
+     * Wraps an RxJava 3 {@link Single} database operation with a CLIENT span.
      *
-     * <p>The span is started before subscribing and ended when the Single terminates
-     * (either success or error). On error, the exception is recorded on the span.
-     *
-     * @param <T>         the result type
-     * @param operation   a short description of the operation (e.g., the SQL statement or key lookup)
-     * @param singleSupplier a supplier that produces the Single to wrap (deferred so the span
-     *                       is current when the operation starts)
+     * @param <T>            the result type
+     * @param operation      a short description of the operation (SQL or key lookup)
+     * @param singleSupplier a supplier producing the Single to wrap (deferred so the span
+     *                       is active when the operation starts)
      * @return a Single that emits the same result, wrapped with a tracing span
      */
     public <T> Single<T> traceSingle(String operation, Supplier<Single<T>> singleSupplier) {
@@ -128,10 +124,10 @@ public final class DbTracing {
     }
 
     /**
-     * Wraps an RxJava {@link Completable} database operation with a CLIENT span.
+     * Wraps an RxJava 3 {@link Completable} database operation with a CLIENT span.
      *
-     * @param operation   a short description of the operation
-     * @param completableSupplier a supplier that produces the Completable to wrap
+     * @param operation           a short description of the operation
+     * @param completableSupplier a supplier producing the Completable to wrap
      * @return a Completable wrapped with a tracing span
      */
     public Completable traceCompletable(String operation, Supplier<Completable> completableSupplier) {
@@ -161,11 +157,11 @@ public final class DbTracing {
     }
 
     /**
-     * Wraps an RxJava {@link Maybe} database operation with a CLIENT span.
+     * Wraps an RxJava 3 {@link Maybe} database operation with a CLIENT span.
      *
-     * @param <T>         the result type
-     * @param operation   a short description of the operation
-     * @param maybeSupplier a supplier that produces the Maybe to wrap
+     * @param <T>           the result type
+     * @param operation     a short description of the operation
+     * @param maybeSupplier a supplier producing the Maybe to wrap
      * @return a Maybe wrapped with a tracing span
      */
     public <T> Maybe<T> traceMaybe(String operation, Supplier<Maybe<T>> maybeSupplier) {
@@ -194,42 +190,14 @@ public final class DbTracing {
         });
     }
 
-    /**
-     * Wraps a synchronous (blocking) database operation with a CLIENT span.
-     *
-     * <p>Useful for clients that do not return RxJava types (e.g., the Aerospike
-     * synchronous client). The span wraps the entire call duration.
-     *
-     * <pre>{@code
-     * Record result = db.traceSync("GET user:123", () -> aerospikeClient.get(null, key));
-     * }</pre>
-     *
-     * @param <T>       the result type
-     * @param operation a short description of the operation
-     * @param supplier  the blocking operation to execute
-     * @return the result of the operation
-     */
-    public <T> T traceSync(String operation, Supplier<T> supplier) {
-        Span span = startSpan(operation);
-        try (Scope ignored = span.makeCurrent()) {
-            T result = supplier.get();
-            return result;
-        } catch (Throwable t) {
-            span.recordException(t,
-                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
-            span.setStatus(StatusCode.ERROR, t.getMessage());
-            throw t;
-        } finally {
-            span.end();
-        }
-    }
-
     private Span startSpan(String operation) {
-        return tracer.spanBuilder(dbSystem + " " + operation)
+        var builder = tracer.spanBuilder(dbSystem + " " + operation)
                 .setSpanKind(SpanKind.CLIENT)
                 .setAttribute(SemanticAttributes.DB_SYSTEM, dbSystem)
-                .setAttribute(SemanticAttributes.DB_STATEMENT, operation)
-                .setAttribute(SemanticAttributes.DB_NAME, dbNamespace)
-                .startSpan();
+                .setAttribute(SemanticAttributes.DB_STATEMENT, operation);
+        if (dbNamespace != null) {
+            builder.setAttribute(SemanticAttributes.DB_NAME, dbNamespace);
+        }
+        return builder.startSpan();
     }
 }

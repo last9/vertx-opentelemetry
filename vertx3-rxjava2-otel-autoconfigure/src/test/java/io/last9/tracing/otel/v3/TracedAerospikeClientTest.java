@@ -38,7 +38,7 @@ class TracedAerospikeClientTest {
         otel.shutdown();
     }
 
-    private IAerospikeClient createTraced(IAerospikeClient stub) {
+    private TracedAerospikeClient createTraced(IAerospikeClient stub) {
         return TracedAerospikeClient.wrap(stub, "test-ns", otel.getOpenTelemetry());
     }
 
@@ -46,7 +46,7 @@ class TracedAerospikeClientTest {
     void getCreatesClientSpan() {
         Record record = new Record(new HashMap<>(), 1, 0);
         IAerospikeClient stub = createStub(record, null);
-        IAerospikeClient traced = createTraced(stub);
+        TracedAerospikeClient traced = createTraced(stub);
 
         Key key = new Key("test-ns", "users", "user:123");
         Record result = traced.get(null, key);
@@ -68,7 +68,7 @@ class TracedAerospikeClientTest {
     @Test
     void putCreatesSpan() {
         IAerospikeClient stub = createStub(null, null);
-        IAerospikeClient traced = createTraced(stub);
+        TracedAerospikeClient traced = createTraced(stub);
 
         Key key = new Key("test-ns", "users", "user:456");
         traced.put(null, key, new Bin("name", "Alice"));
@@ -81,7 +81,7 @@ class TracedAerospikeClientTest {
     @Test
     void deleteCreatesSpan() {
         IAerospikeClient stub = createStub(null, null);
-        IAerospikeClient traced = createTraced(stub);
+        TracedAerospikeClient traced = createTraced(stub);
 
         Key key = new Key("test-ns", "cache", "entry:789");
         traced.delete(null, key);
@@ -94,7 +94,7 @@ class TracedAerospikeClientTest {
     @Test
     void existsCreatesSpan() {
         IAerospikeClient stub = createStub(null, null);
-        IAerospikeClient traced = createTraced(stub);
+        TracedAerospikeClient traced = createTraced(stub);
 
         Key key = new Key("test-ns", "users", "user:123");
         traced.exists(null, key);
@@ -108,7 +108,7 @@ class TracedAerospikeClientTest {
     void errorRecordedOnSpan() {
         IAerospikeClient stub = createStub(null,
                 new AerospikeException("Key not found"));
-        IAerospikeClient traced = createTraced(stub);
+        TracedAerospikeClient traced = createTraced(stub);
 
         Key key = new Key("test-ns", "users", "missing");
         assertThatThrownBy(() -> traced.get(null, key))
@@ -120,9 +120,26 @@ class TracedAerospikeClientTest {
     }
 
     @Test
+    void wrapWithoutNamespaceOmitsDbNameAttribute() {
+        IAerospikeClient stub = createStub(new Record(new HashMap<>(), 1, 0), null);
+        TracedAerospikeClient traced = TracedAerospikeClient.wrap(stub, otel.getOpenTelemetry());
+
+        Key key = new Key("test-ns", "users", "user:123");
+        traced.get(null, key);
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+
+        SpanData span = spans.get(0);
+        assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.system"))).isEqualTo("aerospike");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.name"))).isNull();
+    }
+
+    @Test
     void lifecycleMethodsNotTraced() {
         IAerospikeClient stub = createStub(null, null);
-        IAerospikeClient traced = createTraced(stub);
+        TracedAerospikeClient traced = createTraced(stub);
 
         traced.isConnected();
         traced.close();
@@ -133,7 +150,7 @@ class TracedAerospikeClientTest {
     @Test
     void batchGetUsesKeyCount() {
         IAerospikeClient stub = createStub(null, null);
-        IAerospikeClient traced = createTraced(stub);
+        TracedAerospikeClient traced = createTraced(stub);
 
         Key[] keys = new Key[]{
                 new Key("test-ns", "users", "u1"),

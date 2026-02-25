@@ -149,6 +149,23 @@ class TracedRxClientTest {
     }
 
     @Test
+    void wrapWithoutNamespaceOmitsDbNameAttribute() {
+        FakeDbClient raw = new FakeDbClientImpl();
+        FakeDbClient traced = TracedRxClient.wrap(
+                raw, FakeDbClient.class, "mysql", otel.getOpenTelemetry());
+
+        traced.rxQuery("SELECT 1").blockingGet();
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+
+        SpanData span = spans.get(0);
+        assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.system"))).isEqualTo("mysql");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("db.name"))).isNull();
+    }
+
+    @Test
     void multipleCallsProduceMultipleSpans() {
         FakeDbClient raw = new FakeDbClientImpl();
         FakeDbClient traced = TracedRxClient.wrap(
