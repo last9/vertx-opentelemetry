@@ -4,6 +4,7 @@ import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.reactivex.Single;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -292,6 +294,85 @@ class KafkaTracingTest {
         SpanData span = spanExporter.getFinishedSpanItems().get(0);
         assertThat(span.getAttributes().get(AttributeKey.booleanKey("messaging.kafka.message.tombstone")))
                 .isTrue();
+    }
+
+    // ---- Context isolation tests ----
+
+    @Test
+    void consumerSpanIsRootSpanEvenWhenServerSpanIsActive() {
+        // Reproduce the SERVER span context leak: a Vert.x HTTP SERVER span is active
+        // on the event loop thread. Without Context.root() as parent, the consumer span
+        // would become a child of that SERVER span — producing a wrong trace.
+        Span serverSpan = otel.getOpenTelemetry().getTracer("test")
+                .spanBuilder("GET /api/data")
+                .setSpanKind(SpanKind.SERVER)
+                .startSpan();
+
+        try (Scope ignored = serverSpan.makeCurrent()) {
+            Handler<KafkaConsumerRecords<String, String>> traced = KafkaTracing.tracedBatchHandler(
+                    "orders",
+                    records -> {},
+                    otel.getOpenTelemetry()
+            );
+            traced.handle(emptyBatch());
+        } finally {
+            serverSpan.end();
+        }
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        SpanData consumerSpan = spans.stream()
+                .filter(s -> s.getKind() == SpanKind.CONSUMER)
+                .findFirst().orElseThrow();
+
+        // Consumer span must be a root span — not a child of the HTTP SERVER span
+        assertThat(consumerSpan.getParentSpanContext().isValid()).isFalse();
+    }
+
+    @Test
+    void consumerSpanLinksToProducerViaTraceparentHeader() {
+        // Simulate a producer span with a known trace/span ID
+        Span producerSpan = otel.getOpenTelemetry().getTracer("test")
+                .spanBuilder("orders publish")
+                .setSpanKind(SpanKind.PRODUCER)
+                .startSpan();
+        String producerTraceId = producerSpan.getSpanContext().getTraceId();
+        String producerSpanId = producerSpan.getSpanContext().getSpanId();
+        producerSpan.end();
+
+        // Build a W3C traceparent header value (same format TracedKafkaProducer injects)
+        String traceparent = "00-" + producerTraceId + "-" + producerSpanId + "-01";
+
+        // Create a Kafka ConsumerRecord carrying the traceparent header
+        ConsumerRecord<String, String> rawRecord =
+                new ConsumerRecord<>("orders", 0, 0L, "key-1", "value-1");
+        rawRecord.headers().add("traceparent", traceparent.getBytes(StandardCharsets.UTF_8));
+
+        ConsumerRecords<String, String> raw = new ConsumerRecords<>(
+                Collections.singletonMap(new TopicPartition("orders", 0),
+                        Collections.singletonList(rawRecord)));
+
+        Handler<KafkaConsumerRecords<String, String>> traced = KafkaTracing.tracedBatchHandler(
+                "orders",
+                records -> {},
+                otel.getOpenTelemetry()
+        );
+        traced.handle(new KafkaConsumerRecordsImpl<>(raw));
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        // Only the consumer span — producer span ended before the handler ran
+        SpanData consumerSpan = spans.stream()
+                .filter(s -> s.getKind() == SpanKind.CONSUMER)
+                .findFirst().orElseThrow();
+
+        // Consumer span must be a root span (no parent)
+        assertThat(consumerSpan.getParentSpanContext().isValid()).isFalse();
+
+        // Consumer span must carry a SpanLink pointing to the producer span
+        assertThat(consumerSpan.getLinks()).hasSize(1);
+        assertThat(consumerSpan.getLinks().get(0).getSpanContext().getTraceId())
+                .isEqualTo(producerTraceId);
+        assertThat(consumerSpan.getLinks().get(0).getSpanContext().getSpanId())
+                .isEqualTo(producerSpanId);
     }
 
     // ---- Helpers ----
