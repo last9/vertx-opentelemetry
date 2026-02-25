@@ -749,6 +749,13 @@ Each batch produces a CONSUMER span named `{topic} process` (per OTel convention
 - `messaging.batch.message_count` = batch size
 - `messaging.kafka.consumer.group` = consumer group (if provided)
 
+**Context isolation and SpanLinks**: Per OTel messaging semantic conventions, CONSUMER spans are
+**root spans** — they do not inherit any HTTP SERVER span that may be active on the Vert.x event
+loop thread. If the incoming Kafka records carry a `traceparent` header (injected by
+`TracedKafkaProducer`), the consumer span adds a **SpanLink** pointing to the producer span instead
+of a parent/child relationship. This correctly models the async, decoupled nature of Kafka — the
+producer and consumer appear in separate but linked traces.
+
 Any traced client called inside the handler (e.g., `TracedAerospikeClient`, `TracedWebClient`,
 `DbTracing`) automatically parents under the CONSUMER span.
 
@@ -853,7 +860,7 @@ run, and download the `jars-<sha>` artifact.
 
 **Option 2: Beta releases** — tagged pre-releases appear on the
 [Releases](https://github.com/last9/vertx-opentelemetry/releases) page marked as "Pre-release"
-with downloadable JARs. The latest pre-release is **`v1.3.0-beta.6`** — use this version. Known issues in earlier betas: `v1.3.0-beta.2` has a thin JAR (OTel SDK not bundled); `v1.3.0-beta.3` triggers `NoClassDefFoundError: okhttp3/Interceptor` at startup; `v1.3.0-beta.4` and `v1.3.0-beta.5` are missing `TracedAerospikeClient` returning `TracedAerospikeClient` and `TracedMySQLClient`.
+with downloadable JARs. The latest pre-release is **`v1.3.0-beta.8`** — use this version. Known issues in earlier betas: `v1.3.0-beta.2` has a thin JAR (OTel SDK not bundled); `v1.3.0-beta.3` triggers `NoClassDefFoundError: okhttp3/Interceptor` at startup; `v1.3.0-beta.4` and `v1.3.0-beta.5` are missing `TracedAerospikeClient` and `TracedMySQLClient`; `v1.3.0-beta.6` and `v1.3.0-beta.7` have a Kafka consumer context leak (consumer spans inherit HTTP SERVER span context — fixed in `v1.3.0-beta.8`).
 
 ## Environment Variables
 
@@ -867,7 +874,7 @@ All standard [OpenTelemetry environment variables](https://opentelemetry.io/docs
 | `OTEL_EXPORTER_OTLP_TIMEOUT` | HTTP client timeout per export (ms) | `10000` |
 | `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes | - |
 | `OTEL_LOGS_EXPORTER` | Log exporter (`otlp` / `none`) | `otlp` |
-| `OTEL_METRICS_EXPORTER` | Metrics exporter (`otlp` / `none`) | `none` |
+| `OTEL_METRICS_EXPORTER` | Metrics exporter (`otlp` / `none`) | `otlp` |
 | `OTEL_TRACES_SAMPLER` | Sampling strategy | `parentbased_always_on` |
 | `OTEL_METRIC_EXPORT_INTERVAL` | Metrics push interval (ms) | `60000` |
 | `OTEL_BSP_SCHEDULE_DELAY` | Span batch export interval (ms) | `5000` |
