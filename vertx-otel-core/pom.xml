@@ -17,6 +17,9 @@
         <!-- vertx-otel-core is an internal module — it gets shaded into the two published JARs.
              Publishing it separately would expose a thin JAR that lacks its bundled classes at runtime. -->
         <maven.deploy.skip>true</maven.deploy.skip>
+        <!-- Skip sources and javadoc JARs — this module is not published. -->
+        <maven.source.skip>true</maven.source.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
     </properties>
 
     <name>Vert.x OTel Core</name>
@@ -132,6 +135,26 @@
             <scope>provided</scope>
         </dependency>
     </dependencies>
+
+    <!-- Skip Central Portal publishing for this internal-only module. -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.6.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <skipPublishing>true</skipPublishing>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>
