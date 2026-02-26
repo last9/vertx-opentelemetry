@@ -124,6 +124,16 @@
             </exclusions>
         </dependency>
 
+        <!-- luaj-jse is excluded from aerospike-client above to prevent the JDK 17
+             javadoc tool from failing on its unnamed-package class. Re-added here
+             at test scope so the aerospike tests still have it on their classpath. -->
+        <dependency>
+            <groupId>org.luaj</groupId>
+            <artifactId>luaj-jse</artifactId>
+            <version>3.0.1</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- ==================== Test Dependencies ==================== -->
 
         <dependency>
