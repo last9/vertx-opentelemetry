@@ -215,6 +215,14 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
                 <version>3.6.3</version>
+                <configuration>
+                    <!-- luaj-jse (transitive via Vert.x 3) has classes in the unnamed
+                         package, breaking Java 9+ module descriptor derivation.
+                         ignore-source-errors lets javadoc continue with a synthetic
+                         module name rather than failing the build. -->
+                    <additionalJOption>--ignore-source-errors</additionalJOption>
+                    <detectOfflineLinks>false</detectOfflineLinks>
+                </configuration>
                 <executions>
                     <execution>
                         <id>attach-javadocs</id>
