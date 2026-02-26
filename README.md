@@ -9,39 +9,27 @@ Drop-in OpenTelemetry instrumentation for Vert.x applications. Add the JAR, swap
 
 ## Quick Start
 
-### 1. Install the JAR
+### 1. Add the dependency
 
-Download from [GitHub Releases](https://github.com/last9/vertx-opentelemetry/releases) and install to your local Maven repository:
-
-```bash
-# For Vert.x 4:
-mvn install:install-file -Dfile=vertx4-rxjava3-otel-autoconfigure-1.4.0.jar \
-  -DgroupId=io.last9 -DartifactId=vertx4-rxjava3-otel-autoconfigure -Dversion=1.4.0 -Dpackaging=jar
-
-# For Vert.x 3:
-mvn install:install-file -Dfile=vertx3-rxjava2-otel-autoconfigure-1.4.0.jar \
-  -DgroupId=io.last9 -DartifactId=vertx3-rxjava2-otel-autoconfigure -Dversion=1.4.0 -Dpackaging=jar
-```
-
-> **Self-contained JAR**: Each module JAR bundles `OtelSdkSetup` and `MdcTraceTurboFilter` from the internal `vertx-otel-core` module. You do **not** need a separate `vertx-otel-core` dependency — the single downloaded JAR is all you need.
-
-Then add to your `pom.xml`:
+The library is published to [Maven Central](https://central.sonatype.com/search?q=io.last9). Add to your `pom.xml`:
 
 ```xml
 <!-- Vert.x 4 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>1.4.0</version>
+    <version>1.5.0</version>
 </dependency>
 
 <!-- OR Vert.x 3 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>1.4.0</version>
+    <version>1.5.0</version>
 </dependency>
 ```
+
+> **Self-contained JAR**: Each module bundles all required OTel classes. You do **not** need a separate `vertx-otel-core` dependency.
 
 ### 2. Use OtelLauncher as your main class
 
@@ -848,7 +836,12 @@ To test unreleased changes before a full release:
 
 **Option 1: Download from CI** — every push and PR builds JARs as GitHub Actions artifacts.
 Go to [Actions](https://github.com/last9/vertx-opentelemetry/actions/workflows/ci.yaml), click a
-run, and download the `jars-<sha>` artifact.
+run, and download the `jars-<sha>` artifact. Install locally with:
+
+```bash
+mvn install:install-file -Dfile=vertx4-rxjava3-otel-autoconfigure-<version>.jar \
+  -DgroupId=io.last9 -DartifactId=vertx4-rxjava3-otel-autoconfigure -Dversion=<version> -Dpackaging=jar
+```
 
 **Option 2: Beta releases** — tagged pre-releases appear on the
 [Releases](https://github.com/last9/vertx-opentelemetry/releases) page marked as "Pre-release"
