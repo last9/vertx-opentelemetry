@@ -222,6 +222,11 @@
                          in the unnamed package, making module descriptor derivation
                          impossible on Java 9+. -->
                     <detectOfflineLinks>false</detectOfflineLinks>
+                    <!-- Force Java 8 release mode to bypass JPMS module resolution.
+                         The shaded JAR bundles OTel classes, causing split-package
+                         errors when Javadoc sees the same packages in both the shaded
+                         artifact and the original OTel JARs on the classpath. -->
+                    <release>8</release>
                 </configuration>
                 <executions>
                     <execution>
