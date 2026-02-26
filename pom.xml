@@ -214,13 +214,13 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.6.3</version>
+                <version>3.4.1</version>
                 <configuration>
-                    <!-- luaj-jse (transitive via Vert.x 3) has classes in the unnamed
-                         package, breaking Java 9+ module descriptor derivation.
-                         ignore-source-errors lets javadoc continue with a synthetic
-                         module name rather than failing the build. -->
-                    <additionalJOption>--ignore-source-errors</additionalJOption>
+                    <!-- Plugin 3.4.1 passes all deps via -classpath only.
+                         Version 3.5 introduced automatic module-path detection which
+                         fails for luaj-jse (transitive via Vert.x 3): it has a class
+                         in the unnamed package, making module descriptor derivation
+                         impossible on Java 9+. -->
                     <detectOfflineLinks>false</detectOfflineLinks>
                 </configuration>
                 <executions>
@@ -262,7 +262,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-javadoc-plugin</artifactId>
-                    <version>3.6.3</version>
+                    <version>3.4.1</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
