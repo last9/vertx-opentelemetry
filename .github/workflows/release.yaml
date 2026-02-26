@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   test:
@@ -40,15 +41,21 @@ jobs:
         id: version_change
         env:
           BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          OLD_VERSION=$(git show "${BEFORE_SHA}:pom.xml" 2>/dev/null | grep -m1 '<version>' | sed 's/.*<version>\(.*\)<\/version>.*/\1/' || echo "")
           NEW_VERSION=$(grep -m1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
-          echo "old_version=$OLD_VERSION" >> "$GITHUB_OUTPUT"
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          if [ -n "$OLD_VERSION" ] && [ "$OLD_VERSION" != "$NEW_VERSION" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Manual trigger — forcing release of $NEW_VERSION"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+            OLD_VERSION=$(git show "${BEFORE_SHA}:pom.xml" 2>/dev/null | grep -m1 '<version>' | sed 's/.*<version>\(.*\)<\/version>.*/\1/' || echo "")
+            echo "old_version=$OLD_VERSION" >> "$GITHUB_OUTPUT"
+            if [ -n "$OLD_VERSION" ] && [ "$OLD_VERSION" != "$NEW_VERSION" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Set up Java
