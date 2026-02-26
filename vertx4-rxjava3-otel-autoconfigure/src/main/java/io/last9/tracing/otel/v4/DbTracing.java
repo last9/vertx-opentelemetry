@@ -46,7 +46,7 @@ import java.util.function.Supplier;
  *     .subscribe(record -> { ... });
  * }</pre>
  *
- * @see TracedPgPool for the ready-made PostgreSQL pool wrapper
+ * @see TracedDBPool for the ready-made database pool wrapper
  */
 public final class DbTracing {
 
