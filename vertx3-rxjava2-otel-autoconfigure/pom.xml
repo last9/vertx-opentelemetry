@@ -113,6 +113,15 @@
             <artifactId>aerospike-client</artifactId>
             <version>${aerospike-client.version}</version>
             <scope>provided</scope>
+            <exclusions>
+                <!-- luaj-jse has classes in the unnamed package, which breaks the
+                     JDK 9+ javadoc module descriptor analysis. We don't use Lua
+                     scripting, so this transitive dep is safe to exclude. -->
+                <exclusion>
+                    <groupId>org.luaj</groupId>
+                    <artifactId>luaj-jse</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- ==================== Test Dependencies ==================== -->
