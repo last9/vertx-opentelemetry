@@ -137,6 +137,59 @@
         </dependencies>
     </dependencyManagement>
 
+    <profiles>
+        <profile>
+            <!-- Activate with: mvn deploy -P release
+                 Requires GitHub secrets: GPG_PRIVATE_KEY, GPG_PASSPHRASE, OSSRH_USERNAME, OSSRH_TOKEN -->
+            <id>release</id>
+            <build>
+                <plugins>
+                    <!-- Sign all artifacts with GPG — required by Maven Central -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.4</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <!-- loopback mode: allows passphrase via env var in CI
+                                         without requiring an interactive terminal -->
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- Sonatype Central Portal publishing plugin (new portal, not legacy OSSRH).
+                         Credentials come from the Maven server 'central', which actions/setup-java
+                         maps from MAVEN_USERNAME / MAVEN_PASSWORD environment variables.
+                         autoPublish=true: skip the manual "Release" click in the UI.
+                         waitUntil=published: block the CI job until Central finishes validation. -->
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.6.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <tokenAuth>true</tokenAuth>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
     <build>
         <pluginManagement>
             <plugins>

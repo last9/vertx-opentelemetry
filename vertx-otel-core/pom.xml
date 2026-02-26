@@ -13,6 +13,12 @@
     <artifactId>vertx-otel-core</artifactId>
     <packaging>jar</packaging>
 
+    <properties>
+        <!-- vertx-otel-core is an internal module — it gets shaded into the two published JARs.
+             Publishing it separately would expose a thin JAR that lacks its bundled classes at runtime. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
     <name>Vert.x OTel Core</name>
     <description>
         Shared OpenTelemetry utilities: SDK auto-configuration, Logback MDC trace injection.

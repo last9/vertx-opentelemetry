@@ -86,3 +86,27 @@ jobs:
             "vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-${NEW_VERSION}-sources.jar" \
             "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${NEW_VERSION}.jar" \
             "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${NEW_VERSION}-sources.jar"
+
+      # Publish to Maven Central via Sonatype Central Portal.
+      # Re-configure Java with GPG key and Maven server credentials — setup-java writes
+      # ~/.m2/settings.xml mapping MAVEN_USERNAME/MAVEN_PASSWORD to the 'central' server.
+      - name: Set up Java for Maven Central publishing
+        if: steps.version_change.outputs.changed == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+
+      - name: Publish to Maven Central
+        if: steps.version_change.outputs.changed == 'true'
+        env:
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn deploy -P release -DskipTests -B --no-transfer-progress
