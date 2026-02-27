@@ -89,6 +89,9 @@ public class OtelLauncher extends Launcher {
         // EventLoopLagProbe fills that gap with a setPeriodic-based measurement.
         if (meterRegistry != null) {
             EventLoopLagProbe.install(vertx, meterRegistry);
+        } else {
+            log.warn("Skipping event loop lag probe — metrics registry not initialized "
+                    + "(OTel initialization failed in beforeStartingVertx).");
         }
     }
 }

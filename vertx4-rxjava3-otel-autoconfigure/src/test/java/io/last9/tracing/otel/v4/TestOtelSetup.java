@@ -20,6 +20,7 @@ public class TestOtelSetup {
     private final InMemorySpanExporter spanExporter;
     private final InMemoryMetricReader metricReader;
     private final SdkTracerProvider tracerProvider;
+    private final SdkMeterProvider meterProvider;
     private final OpenTelemetrySdk openTelemetry;
 
     public TestOtelSetup() {
@@ -28,7 +29,7 @@ public class TestOtelSetup {
         this.tracerProvider = SdkTracerProvider.builder()
                 .addSpanProcessor(SimpleSpanProcessor.create(spanExporter))
                 .build();
-        SdkMeterProvider meterProvider = SdkMeterProvider.builder()
+        this.meterProvider = SdkMeterProvider.builder()
                 .registerMetricReader(metricReader)
                 .build();
         this.openTelemetry = OpenTelemetrySdk.builder()
@@ -60,5 +61,6 @@ public class TestOtelSetup {
 
     public void shutdown() {
         tracerProvider.shutdown();
+        meterProvider.shutdown();
     }
 }
