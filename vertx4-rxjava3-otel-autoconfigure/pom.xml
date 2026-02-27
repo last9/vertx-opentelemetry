@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-        <version>1.5.0</version>
+        <version>2.0.0</version>
     </parent>
 
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
@@ -78,6 +78,23 @@
             <groupId>io.vertx</groupId>
             <artifactId>vertx-pg-client</artifactId>
             <scope>provided</scope>
+        </dependency>
+
+        <!-- Vert.x Micrometer metrics integration.
+             Bundled (shaded) so users get Vert.x internal metrics without adding anything.
+             NOT relocated — MicrometerMetricsOptions must match the class Vert.x sees by identity. -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-micrometer-metrics</artifactId>
+            <!-- version managed by vertx-stack-depchain BOM above -->
+        </dependency>
+
+        <!-- OTel Micrometer shim: bridges Micrometer MeterRegistry into the OTel SDK.
+             Bundled via the existing io.opentelemetry.instrumentation:* shade include. -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-micrometer-1.5</artifactId>
+            <version>${opentelemetry-instrumentation.version}-alpha</version>
         </dependency>
 
         <!-- Logback (provided via core, needed at test time for MdcTraceTurboFilter tests) -->
