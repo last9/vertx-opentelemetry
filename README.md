@@ -70,30 +70,55 @@ In your Maven shade/fat-jar plugin configuration:
 
 </details>
 
-### 3. Use TracedRouter instead of Router
+### 3. Start tracing
 
-Replace `Router.router(vertx)` with `TracedRouter.create(vertx)` in your verticle:
+#### Vert.x 3: Zero-code auto-instrumentation (v2.1.0+, recommended)
+
+With `OtelLauncher` as your main class, **no code changes are needed**. The launcher uses ByteBuddy to automatically instrument:
+
+- **`Router.router(vertx)`** → SERVER spans with route-pattern names, `traceparent` extraction, body buffering
+- **`WebClient.create(vertx)`** → CLIENT spans with `traceparent` injection on every outgoing request
+- **`KafkaProducer.create(vertx, config)`** → PRODUCER spans with `traceparent` in Kafka headers
+- **`KafkaConsumer` handlers** → CONSUMER spans per record with topic, partition, offset attributes
+
+Your verticle uses plain Vert.x APIs — tracing is applied at the bytecode level:
 
 ```java
-// Before
+// No Traced* imports needed — these are auto-instrumented
 Router router = Router.router(vertx);
+WebClient client = WebClient.create(vertx);
+KafkaProducer<String, String> producer = KafkaProducer.create(vertx, config);
+```
 
-// After — Vert.x 4
-import io.last9.tracing.otel.v4.TracedRouter;
-Router router = TracedRouter.create(vertx);
+> **Requires JDK** (not JRE): ByteBuddy self-attach uses the JDK Attach API. Use a JDK base image (e.g., `eclipse-temurin:11-jdk`).
 
-// After — Vert.x 3
+> **Do not add `BodyHandler`**: The auto-instrumentation installs body buffering automatically. Adding `BodyHandler.create()` will cause "Request has already been read" errors.
+
+> **Graceful fallback**: If ByteBuddy self-attach fails (e.g., running on a JRE), the application starts without bytecode instrumentation. A warning is logged with instructions to use the manual `Traced*` wrappers instead.
+
+#### Vert.x 3: Manual wrappers (all versions)
+
+For environments where ByteBuddy self-attach is not available, or for fine-grained control, use the `Traced*` wrapper APIs:
+
+```java
 import io.last9.tracing.otel.v3.TracedRouter;
 Router router = TracedRouter.create(vertx);
 ```
 
-This gives you:
-- **Vert.x 4**: Route-pattern span names (`GET /v1/users/:id` instead of just `GET`)
-- **Vert.x 3**: Full HTTP tracing with span creation, `traceparent` extraction, route-pattern span names, and request body buffering
+See the [Outgoing HTTP Tracing](#vert.x-3-outgoing-http-tracing), [Database Tracing](#vertx-3-database-tracing), and [Kafka Tracing](#vertx-3-kafka-tracing) sections for details on each wrapper.
 
-> **Note**: For Vert.x 3, `TracedRouter` is required for HTTP tracing — there is no built-in tracing SPI.
+> **Do not add `BodyHandler`** when using `TracedRouter`: it buffers the request body itself, so `ctx.getBodyAsJson()` works out of the box.
 
-> **Vert.x 3 — do not add `BodyHandler`**: `TracedRouter` buffers the request body itself before calling your handler, so `ctx.getBodyAsJson()` and `ctx.getBody()` work out of the box. Adding `BodyHandler.create()` will conflict with this mechanism.
+#### Vert.x 4
+
+Replace `Router.router(vertx)` with `TracedRouter.create(vertx)` for route-pattern span names:
+
+```java
+import io.last9.tracing.otel.v4.TracedRouter;
+Router router = TracedRouter.create(vertx);
+```
+
+Vert.x 4's `VertxTracer` SPI handles HTTP server/client spans automatically. `TracedRouter` adds route-pattern span names (`GET /v1/users/:id` instead of just `GET`).
 
 ### 4. Set environment variables and run
 
@@ -119,6 +144,7 @@ Logback OpenTelemetry appender installed for log export
 
 ## What You Get
 
+- **Zero-code auto-instrumentation** (Vert.x 3, v2.1.0+) — Router, WebClient, Kafka Producer, and Kafka Consumer are instrumented via ByteBuddy bytecode transformation. No `Traced*` wrapper imports needed.
 - **SERVER spans** for every incoming request, with method, path, status code
 - **CLIENT spans** for every outgoing HTTP request (Vert.x 3), with `http.request.method`, `url.full`, `server.address`, `server.port`, `http.response.status_code`
 - **Route-pattern span names** like `GET /v1/users/:id` (not `GET /v1/users/42`)
@@ -282,6 +308,17 @@ request's trace, work through this checklist:
 
 Three components must all be in place for distributed traces to work:
 
+**With zero-code auto-instrumentation (v2.1.0+):**
+```
+OtelLauncher (self-attaches ByteBuddy)
+  → Router.router(vertx) auto-instrumented (creates SERVER span)
+  → RxJava2ContextPropagation (carries context across thread hops)
+    → WebClient.create(vertx) auto-instrumented (creates CLIENT span + writes traceparent)
+    → KafkaProducer.create() auto-instrumented (creates PRODUCER span + writes traceparent)
+    → KafkaConsumer.handler() auto-instrumented (creates CONSUMER span per record)
+```
+
+**With manual wrappers:**
 ```
 TracedRouter (creates SERVER span)
   → RxJava2ContextPropagation (carries context across thread hops)
@@ -310,10 +347,11 @@ OtelSdkSetup.initialize();
 RxJava2ContextPropagation.install();  // <-- don't forget this
 ```
 
-### 3. Confirm you're using TracedWebClient or ClientTracing.traced
+### 3. Confirm WebClient tracing is active
 
-A plain `WebClient.create(vertx)` never creates CLIENT spans or injects trace headers. Verify your
-outgoing calls use one of:
+With **zero-code instrumentation** (v2.1.0+), `WebClient.create(vertx)` is auto-instrumented — CLIENT spans and `traceparent` injection happen automatically. No manual wrapping needed.
+
+With **manual wrappers**, verify your outgoing calls use one of:
 
 ```java
 // Option A: TracedWebClient (automatic — CLIENT span + traceparent)
@@ -885,6 +923,8 @@ This library works with Vert.x's context model instead of fighting it — using 
 |--------|------|--------|--------|
 | `vertx4-rxjava3-otel-autoconfigure` | 11+ | 4.5+ | 3.x |
 | `vertx3-rxjava2-otel-autoconfigure` | 11+ | 3.9+ | 2.x |
+
+> **Zero-code instrumentation** (Vert.x 3, v2.1.0+) requires a **JDK** runtime, not a JRE. ByteBuddy self-attach uses the JDK Attach API (`com.sun.tools.attach`). If running on a JRE, the application falls back to manual `Traced*` wrapper mode with a warning logged.
 
 ## License
 
