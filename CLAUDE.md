@@ -12,9 +12,10 @@ Multi-module Maven project providing zero-code OpenTelemetry auto-instrumentatio
 
 ```
 vertx-otel-autoconfigure (parent POM)
-├── vertx-otel-core                        # Shared: OtelSdkSetup, MdcTraceTurboFilter
+├── vertx-otel-core                        # Shared: OtelSdkSetup, MdcTraceTurboFilter, OtelAgent
 ├── vertx4-rxjava3-otel-autoconfigure      # Vert.x 4 + RxJava 3 (uses VertxTracer SPI)
-└── vertx3-rxjava2-otel-autoconfigure      # Vert.x 3 + RxJava 2 (handler-based, no SPI)
+├── vertx3-rxjava2-otel-autoconfigure      # Vert.x 3 + RxJava 2 (handler-based + ByteBuddy)
+└── vertx3-otel-agent                      # Standalone -javaagent with classloader isolation
 ```
 
 **Key difference**: Vert.x 4 has a `VertxTracer` SPI so spans are created automatically. Vert.x 3 does NOT have this SPI, so `TracedRouter` creates SERVER spans manually via handler-based instrumentation.

@@ -39,7 +39,7 @@ jobs:
           TAG_VERSION: ${{ steps.version.outputs.version }}
         run: |
           POM_VERSION=$(grep -m1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
-          for module in vertx4-rxjava3-otel-autoconfigure vertx3-rxjava2-otel-autoconfigure; do
+          for module in vertx4-rxjava3-otel-autoconfigure vertx3-rxjava2-otel-autoconfigure vertx3-otel-agent; do
             cd "${module}/target"
             for jar in "${module}-${POM_VERSION}"*.jar; do
               new_name="${jar/${POM_VERSION}/${TAG_VERSION}}"
@@ -60,4 +60,6 @@ jobs:
             "vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-${TAG_VERSION}.jar" \
             "vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-${TAG_VERSION}-sources.jar" \
             "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${TAG_VERSION}.jar" \
-            "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${TAG_VERSION}-sources.jar"
+            "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${TAG_VERSION}-sources.jar" \
+            "vertx3-otel-agent/target/vertx3-otel-agent-${TAG_VERSION}.jar" \
+            "vertx3-otel-agent/target/vertx3-otel-agent-${TAG_VERSION}-sources.jar"

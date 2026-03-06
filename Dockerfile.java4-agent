@@ -1,0 +1,22 @@
+# Init container image for Vert.x 4 + RxJava3 operator-based injection.
+#
+# This image is used by the l9-otel-operator vertx-webhook to copy the agent JAR
+# into a shared emptyDir volume. The webhook then sets:
+#   JAVA_TOOL_OPTIONS=-javaagent:/vertx-otel/vertx-otel.jar
+#
+# Usage in pod spec (injected automatically by the webhook):
+#
+#   initContainers:
+#   - name: vertx-otel-init
+#     image: ghcr.io/last9/vertx-otel-java4:2.0.0
+#     command: ["cp", "/vertx-otel.jar", "/vertx-otel/vertx-otel.jar"]
+#     volumeMounts:
+#     - name: vertx-otel
+#       mountPath: /vertx-otel
+#
+# Build: docker build -f Dockerfile.java4-agent -t ghcr.io/last9/vertx-otel-java4:2.0.0 .
+# (run after: mvn clean package -pl vertx4-rxjava3-otel-autoconfigure -am -DskipTests)
+
+FROM scratch
+COPY vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-2.0.0.jar \
+     /vertx-otel.jar

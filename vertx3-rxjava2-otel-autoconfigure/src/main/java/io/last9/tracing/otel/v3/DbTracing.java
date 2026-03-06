@@ -14,6 +14,8 @@ import io.reactivex.Completable;
 import io.reactivex.Maybe;
 import io.reactivex.Single;
 
+import io.last9.tracing.otel.v3.agent.AgentGuard;
+
 import java.util.function.Supplier;
 
 /**
@@ -106,7 +108,14 @@ public final class DbTracing {
             Span span = startSpan(operation);
             Scope scope = span.makeCurrent();
             try {
-                return singleSupplier.get()
+                AgentGuard.IN_DB_TRACED_CALL.set(true);
+                Single<T> result;
+                try {
+                    result = singleSupplier.get();
+                } finally {
+                    AgentGuard.IN_DB_TRACED_CALL.set(false);
+                }
+                return result
                         .doOnError(err -> {
                             span.recordException(err,
                                     Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
@@ -117,6 +126,7 @@ public final class DbTracing {
                             span.end();
                         });
             } catch (Throwable t) {
+                AgentGuard.IN_DB_TRACED_CALL.set(false);
                 span.recordException(t,
                         Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
@@ -139,7 +149,14 @@ public final class DbTracing {
             Span span = startSpan(operation);
             Scope scope = span.makeCurrent();
             try {
-                return completableSupplier.get()
+                AgentGuard.IN_DB_TRACED_CALL.set(true);
+                Completable result;
+                try {
+                    result = completableSupplier.get();
+                } finally {
+                    AgentGuard.IN_DB_TRACED_CALL.set(false);
+                }
+                return result
                         .doOnError(err -> {
                             span.recordException(err,
                                     Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
@@ -150,6 +167,7 @@ public final class DbTracing {
                             span.end();
                         });
             } catch (Throwable t) {
+                AgentGuard.IN_DB_TRACED_CALL.set(false);
                 span.recordException(t,
                         Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
@@ -173,7 +191,14 @@ public final class DbTracing {
             Span span = startSpan(operation);
             Scope scope = span.makeCurrent();
             try {
-                return maybeSupplier.get()
+                AgentGuard.IN_DB_TRACED_CALL.set(true);
+                Maybe<T> result;
+                try {
+                    result = maybeSupplier.get();
+                } finally {
+                    AgentGuard.IN_DB_TRACED_CALL.set(false);
+                }
+                return result
                         .doOnError(err -> {
                             span.recordException(err,
                                     Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
@@ -184,6 +209,7 @@ public final class DbTracing {
                             span.end();
                         });
             } catch (Throwable t) {
+                AgentGuard.IN_DB_TRACED_CALL.set(false);
                 span.recordException(t,
                         Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
@@ -212,7 +238,15 @@ public final class DbTracing {
     public <T> T traceSync(String operation, Supplier<T> supplier) {
         Span span = startSpan(operation);
         try (Scope ignored = span.makeCurrent()) {
-            T result = supplier.get();
+            // Set guard so bytecode agent advice skips the raw client call
+            // that our delegate wrapper is about to make.
+            AgentGuard.IN_DB_TRACED_CALL.set(true);
+            T result;
+            try {
+                result = supplier.get();
+            } finally {
+                AgentGuard.IN_DB_TRACED_CALL.set(false);
+            }
             return result;
         } catch (Throwable t) {
             span.recordException(t,

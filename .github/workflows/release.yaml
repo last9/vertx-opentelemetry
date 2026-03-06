@@ -93,7 +93,9 @@ jobs:
             "vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-${NEW_VERSION}.jar" \
             "vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-${NEW_VERSION}-sources.jar" \
             "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${NEW_VERSION}.jar" \
-            "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${NEW_VERSION}-sources.jar"
+            "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${NEW_VERSION}-sources.jar" \
+            "vertx3-otel-agent/target/vertx3-otel-agent-${NEW_VERSION}.jar" \
+            "vertx3-otel-agent/target/vertx3-otel-agent-${NEW_VERSION}-sources.jar"
 
       # Publish to Maven Central via Sonatype Central Portal.
       # Re-configure Java with GPG key and Maven server credentials — setup-java writes
@@ -118,3 +120,57 @@ jobs:
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: mvn deploy -P release -DskipTests -B --no-transfer-progress
+
+  docker:
+    name: Build and push agent init container images
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep -m1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build JARs
+        run: mvn package -B --no-transfer-progress -DskipTests
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Vert.x 4 agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.java4-agent
+          push: true
+          tags: |
+            ghcr.io/last9/vertx-otel-java4:${{ steps.version.outputs.version }}
+            ghcr.io/last9/vertx-otel-java4:latest
+
+      - name: Build and push Vert.x 3 agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.java3-agent
+          push: true
+          tags: |
+            ghcr.io/last9/vertx-otel-java3:${{ steps.version.outputs.version }}
+            ghcr.io/last9/vertx-otel-java3:latest

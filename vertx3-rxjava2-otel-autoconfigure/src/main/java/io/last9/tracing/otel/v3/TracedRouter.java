@@ -19,6 +19,10 @@ import io.vertx.reactivex.ext.web.Route;
 import io.vertx.reactivex.ext.web.Router;
 import io.vertx.reactivex.ext.web.RoutingContext;
 
+import java.util.Collections;
+import java.util.Set;
+import java.util.WeakHashMap;
+
 /**
  * Factory for creating a Vert.x 3 Router with automatic OpenTelemetry tracing.
  *
@@ -60,6 +64,11 @@ public final class TracedRouter {
     private static final String SPAN_KEY = "otel.span";
     private static final String ROUTE_KEY = "otel.route";
 
+    /** Tracks which Router instances already have tracing handlers installed.
+     *  Weak references allow GC of Routers that go out of scope. */
+    private static final Set<Router> INSTRUMENTED = Collections.synchronizedSet(
+            Collections.newSetFromMap(new WeakHashMap<>()));
+
     private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<>() {
         @Override
         public Iterable<String> keys(HttpServerRequest carrier) {
@@ -100,8 +109,36 @@ public final class TracedRouter {
      */
     public static Router create(Vertx vertx, OpenTelemetry openTelemetry) {
         Router router = Router.router(vertx);
-        installTracingHandler(router, openTelemetry);
+        instrumentExisting(router, openTelemetry);
         return router;
+    }
+
+    /**
+     * Install tracing handlers on an existing Router using {@link GlobalOpenTelemetry}.
+     *
+     * <p>Called by the bytecode agent ({@link io.last9.tracing.otel.v3.agent.RouterAdvice})
+     * after intercepting {@code Router.router(Vertx)}. Safe to call multiple times on the
+     * same Router instance — only the first call installs handlers.
+     *
+     * @param router the Router to instrument
+     */
+    public static void instrumentExisting(Router router) {
+        instrumentExisting(router, GlobalOpenTelemetry.get());
+    }
+
+    /**
+     * Install tracing handlers on an existing Router. Idempotent — if the Router
+     * has already been instrumented (by either this method or {@link #create}),
+     * subsequent calls are no-ops.
+     *
+     * @param router        the Router to instrument
+     * @param openTelemetry the OpenTelemetry instance to use
+     */
+    public static void instrumentExisting(Router router, OpenTelemetry openTelemetry) {
+        if (!INSTRUMENTED.add(router)) {
+            return;
+        }
+        installTracingHandler(router, openTelemetry);
     }
 
     private static void installTracingHandler(Router router, OpenTelemetry openTelemetry) {

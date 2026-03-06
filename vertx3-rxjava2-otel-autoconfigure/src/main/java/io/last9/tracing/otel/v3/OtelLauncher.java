@@ -1,35 +1,49 @@
 package io.last9.tracing.otel.v3;
 
+import io.last9.tracing.otel.OtelAgent;
 import io.last9.tracing.otel.OtelSdkSetup;
+import io.last9.tracing.otel.v3.agent.Vertx3Instrumenter;
 import io.vertx.core.Launcher;
 import io.vertx.core.VertxOptions;
+import net.bytebuddy.agent.ByteBuddyAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.instrument.Instrumentation;
+
 /**
- * Custom Vert.x 3 Launcher that auto-configures OpenTelemetry.
+ * Custom Vert.x 3 Launcher that auto-configures OpenTelemetry and installs
+ * ByteBuddy bytecode instrumentation for zero-code tracing.
  *
- * <p>This launcher extends {@link io.vertx.core.Launcher} and configures OpenTelemetry
- * before Vert.x starts. Unlike Vert.x 4, there is no built-in tracing SPI, so
- * HTTP tracing is provided by {@link TracedRouter} (handler-based instrumentation).
+ * <p>This launcher extends {@link io.vertx.core.Launcher} and performs three steps
+ * before Vert.x starts:
+ * <ol>
+ *   <li>Auto-configures the OpenTelemetry SDK from OTEL_* environment variables</li>
+ *   <li>Installs RxJava2 context propagation hooks</li>
+ *   <li>Installs ByteBuddy bytecode instrumentation for Router, WebClient, Kafka,
+ *       Aerospike, Redis, JDBC, and reactive SQL</li>
+ * </ol>
  *
- * <p>This launcher provides:
- * <ul>
- *   <li>OpenTelemetry SDK auto-configuration from OTEL_* environment variables</li>
- *   <li>RxJava2 context propagation hooks</li>
- *   <li>Logback MDC injection for trace_id/span_id</li>
- * </ul>
- *
- * <p>For HTTP tracing, use {@link TracedRouter#create(io.vertx.reactivex.core.Vertx)}
- * instead of {@code Router.router(vertx)}.
+ * <h2>Instrumentation handle resolution</h2>
+ * <p>ByteBuddy needs a JVM {@code Instrumentation} handle. This launcher resolves it
+ * in priority order:
+ * <ol>
+ *   <li><b>From {@code -javaagent}</b>: If the JAR was loaded as a Java agent,
+ *       {@link OtelAgent#getInstrumentation()} returns the handle from {@code premain}.
+ *       No self-attach needed — works on JRE.</li>
+ *   <li><b>Self-attach via ByteBuddy</b>: If no agent was used, attempts
+ *       {@link ByteBuddyAgent#install()} which requires a JDK (Attach API).</li>
+ *   <li><b>Graceful fallback</b>: If both fail, the app starts without bytecode
+ *       instrumentation. Manual {@code Traced*} wrappers still work.</li>
+ * </ol>
  *
  * <h2>Usage</h2>
  * <pre>{@code
  * <mainClass>io.last9.tracing.otel.v3.OtelLauncher</mainClass>
  * }</pre>
  *
- * @see TracedRouter
- * @see <a href="https://opentelemetry.io/docs/concepts/sdk-configuration/">OpenTelemetry SDK Configuration</a>
+ * @see OtelAgent
+ * @see Vertx3Instrumenter
  */
 public class OtelLauncher extends Launcher {
 
@@ -41,6 +55,13 @@ public class OtelLauncher extends Launcher {
 
     @Override
     public void beforeStartingVertx(VertxOptions options) {
+        // Check if any agent (standalone vertx3-otel-agent or same-JAR OtelAgent) already ran.
+        // Both store the Instrumentation handle via OtelAgent.storeInstrumentation().
+        if (OtelAgent.getInstrumentation() != null) {
+            log.info("OTel Agent already initialized via -javaagent — OtelLauncher is a no-op");
+            return;
+        }
+
         try {
             // 1. Auto-configure OpenTelemetry SDK (shared setup)
             OtelSdkSetup.initialize();
@@ -50,11 +71,24 @@ public class OtelLauncher extends Launcher {
             RxJava2ContextPropagation.install();
             log.info("RxJava2 context propagation hooks installed");
 
-            log.info("Use TracedRouter.create(vertx) for automatic HTTP tracing.");
+            // 3. Install ByteBuddy bytecode instrumentation for zero-code tracing
+            installByteBuddyInstrumentation();
 
         } catch (Exception e) {
             log.error("Failed to initialize OpenTelemetry: {}", e.getMessage(), e);
             log.warn("Application will start WITHOUT tracing.");
+        }
+    }
+
+    private void installByteBuddyInstrumentation() {
+        try {
+            Instrumentation inst = ByteBuddyAgent.install();
+            Vertx3Instrumenter.install(inst);
+            log.info("ByteBuddy zero-code instrumentation installed via self-attach");
+        } catch (Exception e) {
+            log.warn("ByteBuddy self-attach failed: {}. " +
+                    "Use -javaagent:app.jar flag for bytecode instrumentation, " +
+                    "or use TracedRouter.create(vertx) for manual tracing.", e.getMessage());
         }
     }
 }

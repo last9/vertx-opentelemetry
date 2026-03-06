@@ -15,6 +15,7 @@ import io.opentelemetry.instrumentation.runtimemetrics.java8.MemoryPools;
 import io.opentelemetry.instrumentation.runtimemetrics.java8.Threads;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,9 +45,24 @@ import org.slf4j.LoggerFactory;
 public final class OtelSdkSetup {
 
     private static final Logger log = LoggerFactory.getLogger(OtelSdkSetup.class);
+    private static final AtomicBoolean INITIALIZED = new AtomicBoolean(false);
+    private static volatile OpenTelemetry INSTANCE = null;
 
     private OtelSdkSetup() {
         // Utility class
+    }
+
+    /**
+     * Resets initialization state. <strong>Test use only.</strong>
+     *
+     * <p>Call this alongside {@code GlobalOpenTelemetry.resetForTest()} in {@code @BeforeEach}
+     * so that each test starts with a clean SDK state.
+     */
+    static void resetForTest() {
+        synchronized (OtelSdkSetup.class) {
+            INITIALIZED.set(false);
+            INSTANCE = null;
+        }
     }
 
     /**
@@ -63,60 +79,74 @@ public final class OtelSdkSetup {
      * @return a fully configured OpenTelemetry instance
      */
     public static OpenTelemetry initialize() {
-        String serviceName = getEnvOrDefault("OTEL_SERVICE_NAME", "unknown-service");
-        String otlpEndpoint = getEnvOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
+        // Fast path: already initialized (e.g. OtelAgent.premain ran first).
+        if (INITIALIZED.get()) {
+            log.debug("OtelSdkSetup.initialize() called again — returning cached instance");
+            return INSTANCE;
+        }
+        synchronized (OtelSdkSetup.class) {
+            if (INITIALIZED.get()) {
+                return INSTANCE;
+            }
 
-        log.info("=== OpenTelemetry Auto-Configuration ===");
-        log.info("Service: {}", serviceName);
-        log.info("OTLP Endpoint: {}", otlpEndpoint);
+            String serviceName = getEnvOrDefault("OTEL_SERVICE_NAME", "unknown-service");
+            String otlpEndpoint = getEnvOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
 
-        // 1. Auto-configure SDK from OTEL_* env vars.
-        //    Process/host/OS resource attributes (process.pid, host.name, os.type, etc.) are
-        //    contributed automatically by the SPI providers in opentelemetry-resources:
-        //    ProcessResourceProvider, HostResourceProvider, OsResourceProvider.
-        //
-        //    telemetry.distro.name is set explicitly so Last9's OTel Collector transform
-        //    processor can identify spans from this library and apply semconv remapping
-        //    (e.g. http.response.status_code → http.status_code).
-        Resource distroResource = Resource.create(Attributes.of(
-                AttributeKey.stringKey("telemetry.distro.name"),
-                "opentelemetry-java-instrumentation"));
+            log.info("=== OpenTelemetry Auto-Configuration ===");
+            log.info("Service: {}", serviceName);
+            log.info("OTLP Endpoint: {}", otlpEndpoint);
 
-        OpenTelemetrySdk sdk = AutoConfiguredOpenTelemetrySdk.builder()
-                // Default to http/protobuf so the bundled JDK sender is used.
-                // The default gRPC protocol requires okhttp3 which is NOT bundled.
-                // Customers can override with OTEL_EXPORTER_OTLP_PROTOCOL=grpc if they
-                // add okhttp3 to their own classpath.
-                .addPropertiesSupplier(() -> {
-                    if (System.getenv("OTEL_EXPORTER_OTLP_PROTOCOL") == null) {
-                        return java.util.Map.of("otel.exporter.otlp.protocol", "http/protobuf");
-                    }
-                    return java.util.Map.of();
-                })
-                .addResourceCustomizer((resource, config) -> resource.merge(distroResource))
-                .setResultAsGlobal()
-                .build()
-                .getOpenTelemetrySdk();
+            // 1. Auto-configure SDK from OTEL_* env vars.
+            //    Process/host/OS resource attributes (process.pid, host.name, os.type, etc.) are
+            //    contributed automatically by the SPI providers in opentelemetry-resources:
+            //    ProcessResourceProvider, HostResourceProvider, OsResourceProvider.
+            //
+            //    telemetry.distro.name is set explicitly so Last9's OTel Collector transform
+            //    processor can identify spans from this library and apply semconv remapping
+            //    (e.g. http.response.status_code → http.status_code).
+            Resource distroResource = Resource.create(Attributes.of(
+                    AttributeKey.stringKey("telemetry.distro.name"),
+                    "opentelemetry-java-instrumentation"));
 
-        log.info("OpenTelemetry SDK initialized successfully");
+            OpenTelemetrySdk sdk = AutoConfiguredOpenTelemetrySdk.builder()
+                    // Default to http/protobuf so the bundled JDK sender is used.
+                    // The default gRPC protocol requires okhttp3 which is NOT bundled.
+                    // Customers can override with OTEL_EXPORTER_OTLP_PROTOCOL=grpc if they
+                    // add okhttp3 to their own classpath.
+                    .addPropertiesSupplier(() -> {
+                        if (System.getenv("OTEL_EXPORTER_OTLP_PROTOCOL") == null) {
+                            return java.util.Map.of("otel.exporter.otlp.protocol", "http/protobuf");
+                        }
+                        return java.util.Map.of();
+                    })
+                    .addResourceCustomizer((resource, config) -> resource.merge(distroResource))
+                    .setResultAsGlobal()
+                    .build()
+                    .getOpenTelemetrySdk();
 
-        // 2. Verify propagators are configured for distributed tracing (traceparent header).
-        //    AutoConfigure should set up W3C by default, but fat-jar shading can strip
-        //    META-INF/services and silently break propagation.
-        OpenTelemetry openTelemetry = ensurePropagators(sdk);
+            log.info("OpenTelemetry SDK initialized successfully");
 
-        // 3. Install OpenTelemetry Logback appender for log export
-        OpenTelemetryAppender.install(openTelemetry);
-        log.info("Logback OpenTelemetry appender installed for log export");
+            // 2. Verify propagators are configured for distributed tracing (traceparent header).
+            //    AutoConfigure should set up W3C by default, but fat-jar shading can strip
+            //    META-INF/services and silently break propagation.
+            OpenTelemetry openTelemetry = ensurePropagators(sdk);
 
-        // 4. Register JVM runtime metric observers.
-        //    These are no-ops when OTEL_METRICS_EXPORTER is unset (default "none").
-        //    Set OTEL_METRICS_EXPORTER=otlp to export to the configured OTLP endpoint.
-        registerJvmMetrics(openTelemetry);
-        log.info("JVM runtime metrics registered (memory, GC, threads, CPU, classes)");
+            // 3. Install OpenTelemetry Logback appender for log export
+            OpenTelemetryAppender.install(openTelemetry);
+            log.info("Logback OpenTelemetry appender installed for log export");
 
-        log.info("=== OpenTelemetry Ready ===");
-        return openTelemetry;
+            // 4. Register JVM runtime metric observers.
+            //    These are no-ops when OTEL_METRICS_EXPORTER is unset (default "none").
+            //    Set OTEL_METRICS_EXPORTER=otlp to export to the configured OTLP endpoint.
+            registerJvmMetrics(openTelemetry);
+            log.info("JVM runtime metrics registered (memory, GC, threads, CPU, classes)");
+
+            log.info("=== OpenTelemetry Ready ===");
+
+            INSTANCE = openTelemetry;
+            INITIALIZED.set(true);
+            return INSTANCE;
+        }
     }
 
     /**
