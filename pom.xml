@@ -72,6 +72,9 @@
         <!-- Aerospike -->
         <aerospike-client.version>7.2.1</aerospike-client.version>
 
+        <!-- ByteBuddy (Vert.x 3 bytecode instrumentation) -->
+        <bytebuddy.version>1.14.18</bytebuddy.version>
+
         <!-- Test -->
         <junit.version>5.10.1</junit.version>
         <assertj.version>3.27.7</assertj.version>
@@ -121,6 +124,13 @@
                 <groupId>ch.qos.logback</groupId>
                 <artifactId>logback-classic</artifactId>
                 <version>${logback.version}</version>
+            </dependency>
+
+            <!-- ByteBuddy -->
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy</artifactId>
+                <version>${bytebuddy.version}</version>
             </dependency>
 
             <!-- Test -->
@@ -320,6 +330,11 @@
                                         <include>org.jetbrains.kotlin:kotlin-stdlib</include>
                                         <include>org.jetbrains.kotlin:kotlin-stdlib-jdk7</include>
                                         <include>org.jetbrains.kotlin:kotlin-stdlib-jdk8</include>
+                                        <!-- ByteBuddy: bytecode instrumentation for Vert.x 3
+                                             zero-code tracing (Router, WebClient interception).
+                                             Only used in the v3 fat JAR; shade silently skips
+                                             artifacts not present in a module's dependency graph. -->
+                                        <include>net.bytebuddy:byte-buddy</include>
                                         <!-- Vert.x Micrometer integration + Micrometer core.
                                              Bundled so users get internal Vert.x metrics without
                                              adding any extra dependencies.
@@ -344,6 +359,16 @@
                                          Without this, only one ResourceProvider set survives shading
                                          and cloud/K8s detectors registered by contrib JARs are lost. -->
                                     <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                    <!-- Expose the fat JAR as a -javaagent for operator-based
+                                         injection. OtelAgent.premain() initializes the OTel SDK
+                                         and (for v3) installs ByteBuddy class transformers. -->
+                                    <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                        <manifestEntries>
+                                            <Premain-Class>io.last9.tracing.otel.OtelAgent</Premain-Class>
+                                            <Can-Redefine-Classes>true</Can-Redefine-Classes>
+                                            <Can-Retransform-Classes>true</Can-Retransform-Classes>
+                                        </manifestEntries>
+                                    </transformer>
                                 </transformers>
                             </configuration>
                         </execution>

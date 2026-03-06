@@ -51,6 +51,13 @@
             <artifactId>opentelemetry-semconv</artifactId>
         </dependency>
 
+        <!-- ByteBuddy: bytecode instrumentation for zero-code tracing
+             (intercepts Router.router() and WebClient.create() at class-load time) -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+        </dependency>
+
         <!-- Logback (provided via core, needed at test time for MdcTraceTurboFilter tests) -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
