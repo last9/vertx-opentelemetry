@@ -1,5 +1,6 @@
 package io.last9.tracing.otel.v3;
 
+import io.last9.tracing.otel.OtelAgent;
 import io.last9.tracing.otel.OtelSdkSetup;
 import io.last9.tracing.otel.v3.agent.Vertx3Instrumenter;
 import io.vertx.core.Launcher;
@@ -19,20 +20,30 @@ import java.lang.instrument.Instrumentation;
  * <ol>
  *   <li>Auto-configures the OpenTelemetry SDK from OTEL_* environment variables</li>
  *   <li>Installs RxJava2 context propagation hooks</li>
- *   <li>Self-attaches ByteBuddy and installs bytecode instrumentation for Router,
- *       WebClient, Kafka, Aerospike, Redis, JDBC, and reactive SQL</li>
+ *   <li>Installs ByteBuddy bytecode instrumentation for Router, WebClient, Kafka,
+ *       Aerospike, Redis, JDBC, and reactive SQL</li>
  * </ol>
  *
- * <p>No {@code -javaagent} flag is needed — this launcher handles everything.
- * Applications only need to set this as the main class and use standard Vert.x APIs.
+ * <h2>Instrumentation handle resolution</h2>
+ * <p>ByteBuddy needs a JVM {@code Instrumentation} handle. This launcher resolves it
+ * in priority order:
+ * <ol>
+ *   <li><b>From {@code -javaagent}</b>: If the JAR was loaded as a Java agent,
+ *       {@link OtelAgent#getInstrumentation()} returns the handle from {@code premain}.
+ *       No self-attach needed — works on JRE.</li>
+ *   <li><b>Self-attach via ByteBuddy</b>: If no agent was used, attempts
+ *       {@link ByteBuddyAgent#install()} which requires a JDK (Attach API).</li>
+ *   <li><b>Graceful fallback</b>: If both fail, the app starts without bytecode
+ *       instrumentation. Manual {@code Traced*} wrappers still work.</li>
+ * </ol>
  *
  * <h2>Usage</h2>
  * <pre>{@code
  * <mainClass>io.last9.tracing.otel.v3.OtelLauncher</mainClass>
  * }</pre>
  *
+ * @see OtelAgent
  * @see Vertx3Instrumenter
- * @see <a href="https://opentelemetry.io/docs/concepts/sdk-configuration/">OpenTelemetry SDK Configuration</a>
  */
 public class OtelLauncher extends Launcher {
 
@@ -44,6 +55,14 @@ public class OtelLauncher extends Launcher {
 
     @Override
     public void beforeStartingVertx(VertxOptions options) {
+        // If OtelAgent.premain() already ran (via -javaagent), SDK is initialized
+        // and ByteBuddy transformers are installed. Just ensure RxJava2 hooks are in place.
+        if (OtelAgent.getInstrumentation() != null) {
+            log.info("OtelAgent already initialized via -javaagent — skipping SDK setup");
+            RxJava2ContextPropagation.install();
+            return;
+        }
+
         try {
             // 1. Auto-configure OpenTelemetry SDK (shared setup)
             OtelSdkSetup.initialize();
@@ -69,7 +88,7 @@ public class OtelLauncher extends Launcher {
             log.info("ByteBuddy zero-code instrumentation installed via self-attach");
         } catch (Exception e) {
             log.warn("ByteBuddy self-attach failed: {}. " +
-                    "Use -javaagent flag for bytecode instrumentation, " +
+                    "Use -javaagent:app.jar flag for bytecode instrumentation, " +
                     "or use TracedRouter.create(vertx) for manual tracing.", e.getMessage());
         }
     }
