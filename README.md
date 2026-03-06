@@ -35,29 +35,22 @@ The library is published to [Maven Central](https://central.sonatype.com/search?
 
 Choose one of three options (Vert.x 3). Vert.x 4 users: skip to [Step 3](#3-start-tracing).
 
-#### Option A: `-javaagent` flag (recommended — no code changes, works on JRE)
+#### Option A: Standalone agent JAR (recommended — no code changes, works on JRE)
 
-Add `Premain-Class` to your shade plugin's manifest and run with `-javaagent:app.jar`:
-
-```xml
-<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-    <mainClass>io.vertx.core.Launcher</mainClass>  <!-- your own main class -->
-    <manifestEntries>
-        <Main-Verticle>com.example.MainVerticle</Main-Verticle>
-        <Premain-Class>io.last9.tracing.otel.OtelAgent</Premain-Class>
-        <Can-Redefine-Classes>true</Can-Redefine-Classes>
-        <Can-Retransform-Classes>true</Can-Retransform-Classes>
-    </manifestEntries>
-</transformer>
-<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-```
+Download `vertx3-otel-agent-<version>.jar` from [Releases](https://github.com/last9/vertx-opentelemetry/releases) and run with `-javaagent`:
 
 ```bash
-# Same JAR used as both agent and application — no classpath conflicts
-java -javaagent:app.jar -jar app.jar
+java -javaagent:vertx3-otel-agent-2.1.0.jar -jar app.jar
 ```
 
-The JVM calls `OtelAgent.premain()` before your `main()`, which initializes the OTel SDK and installs ByteBuddy transformers. **No main class change needed** — use the standard `io.vertx.core.Launcher` or your own.
+**No main class change, no manifest changes, works on JRE.** The agent uses classloader isolation (like the OTel Java agent) — only a tiny 2-class shim goes on the system classloader. All heavy dependencies (ByteBuddy, OTel SDK) are loaded in an isolated classloader from an embedded JAR.
+
+The agent automatically:
+1. Initializes the OTel SDK on the app classloader
+2. Installs RxJava2 context propagation hooks
+3. Installs ByteBuddy class transformers for Router, WebClient, Kafka, etc.
+
+Your app must include `vertx3-rxjava2-otel-autoconfigure` as a Maven dependency (the agent's inlined advice resolves helper classes from your app's classpath).
 
 #### Option B: OtelLauncher as main class (no JVM flags, requires JDK)
 

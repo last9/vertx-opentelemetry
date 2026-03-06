@@ -37,3 +37,4 @@ jobs:
           path: |
             vertx4-rxjava3-otel-autoconfigure/target/*.jar
             vertx3-rxjava2-otel-autoconfigure/target/*.jar
+            vertx3-otel-agent/target/*.jar

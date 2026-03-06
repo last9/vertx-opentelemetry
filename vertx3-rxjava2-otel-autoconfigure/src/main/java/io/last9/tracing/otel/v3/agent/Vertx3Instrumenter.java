@@ -64,6 +64,19 @@ public final class Vertx3Instrumenter {
         io.last9.tracing.otel.v3.RxJava2ContextPropagation.install();
         log.info("Vertx3Instrumenter: RxJava2 context propagation installed");
 
+        installTransformersOnly(inst);
+    }
+
+    /**
+     * Install only ByteBuddy class transformers, without RxJava hooks or OTel SDK init.
+     *
+     * <p>Used by the standalone agent ({@code vertx3-otel-agent}) which initializes
+     * OTel SDK and RxJava hooks separately on the application classloader before
+     * calling this method from an isolated classloader.
+     *
+     * @param inst the JVM instrumentation handle
+     */
+    public static void installTransformersOnly(Instrumentation inst) {
         AgentBuilder.Listener listener = new AgentBuilder.Listener.Adapter() {
             @Override
             public void onTransformation(TypeDescription typeDescription, ClassLoader classLoader,
