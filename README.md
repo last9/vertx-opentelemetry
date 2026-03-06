@@ -31,9 +31,31 @@ The library is published to [Maven Central](https://central.sonatype.com/search?
 
 > **Self-contained JAR**: Each module bundles all required OTel classes. You do **not** need a separate `vertx-otel-core` dependency.
 
-### 2. Use OtelLauncher as your main class
+### 2. Enable auto-instrumentation
 
-In your Maven shade/fat-jar plugin configuration:
+Choose one of three options (Vert.x 3). Vert.x 4 users: skip to [Step 3](#3-start-tracing).
+
+#### Option A: Standalone agent JAR (recommended — no code changes, works on JRE)
+
+Download `vertx3-otel-agent-<version>.jar` from [Releases](https://github.com/last9/vertx-opentelemetry/releases) and run with `-javaagent`:
+
+```bash
+java -javaagent:vertx3-otel-agent-2.1.0.jar -jar app.jar
+```
+
+**No main class change, no manifest changes, works on JRE.** The agent uses classloader isolation (like the OTel Java agent) — only a tiny 2-class shim goes on the system classloader. All heavy dependencies (ByteBuddy, OTel SDK) are loaded in an isolated classloader from an embedded JAR.
+
+The agent automatically:
+1. Stores the `Instrumentation` handle via `OtelAgent.storeInstrumentation()` on the app classloader
+2. Initializes the OTel SDK on the app classloader
+3. Installs RxJava2 context propagation hooks
+4. Installs ByteBuddy class transformers for Router, WebClient, Kafka, Aerospike, Redis, JDBC, and reactive SQL clients
+
+If `OtelLauncher` is also used as main class, it detects that the agent already ran and becomes a no-op.
+
+Your app must include `vertx3-rxjava2-otel-autoconfigure` as a Maven dependency (the agent's inlined advice resolves helper classes from your app's classpath).
+
+#### Option B: OtelLauncher as main class (no JVM flags, requires JDK)
 
 ```xml
 <!-- Vert.x 4 -->
@@ -42,6 +64,8 @@ In your Maven shade/fat-jar plugin configuration:
 <!-- Vert.x 3 -->
 <mainClass>io.last9.tracing.otel.v3.OtelLauncher</mainClass>
 ```
+
+OtelLauncher self-attaches ByteBuddy before deploying verticles. Requires a **JDK** runtime (not JRE) for the Attach API. If both `-javaagent` and OtelLauncher are used together, OtelLauncher detects that `premain` already ran and skips self-attach.
 
 <details>
 <summary>Example: maven-shade-plugin configuration</summary>
@@ -57,9 +81,8 @@ In your Maven shade/fat-jar plugin configuration:
             <configuration>
                 <transformers>
                     <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                        <mainClass>io.last9.tracing.otel.v4.OtelLauncher</mainClass>
+                        <mainClass>io.last9.tracing.otel.v3.OtelLauncher</mainClass>
                     </transformer>
-                    <!-- Required: merge OpenTelemetry SPI files -->
                     <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                 </transformers>
             </configuration>
@@ -70,11 +93,20 @@ In your Maven shade/fat-jar plugin configuration:
 
 </details>
 
+#### Option C: Manual wrappers (all versions, no bytecode instrumentation)
+
+For environments where neither `-javaagent` nor OtelLauncher is feasible, use the `Traced*` wrapper APIs directly:
+
+```java
+import io.last9.tracing.otel.v3.TracedRouter;
+Router router = TracedRouter.create(vertx);
+```
+
+See the [Outgoing HTTP Tracing](#vert.x-3-outgoing-http-tracing), [Database Tracing](#vertx-3-database-tracing), and [Kafka Tracing](#vertx-3-kafka-tracing) sections for details on each wrapper.
+
 ### 3. Start tracing
 
-#### Vert.x 3: Zero-code auto-instrumentation (v2.1.0+, recommended)
-
-With `OtelLauncher` as your main class, **no code changes are needed**. The launcher uses ByteBuddy to automatically instrument:
+With auto-instrumentation enabled (Option A or B), **no code changes are needed**. ByteBuddy automatically instruments:
 
 - **`Router.router(vertx)`** → SERVER spans with route-pattern names, `traceparent` extraction, body buffering
 - **`WebClient.create(vertx)`** → CLIENT spans with `traceparent` injection on every outgoing request
@@ -90,35 +122,14 @@ WebClient client = WebClient.create(vertx);
 KafkaProducer<String, String> producer = KafkaProducer.create(vertx, config);
 ```
 
-> **Requires JDK** (not JRE): ByteBuddy self-attach uses the JDK Attach API. Use a JDK base image (e.g., `eclipse-temurin:11-jdk`).
-
 > **Do not add `BodyHandler`**: The auto-instrumentation installs body buffering automatically. Adding `BodyHandler.create()` will cause "Request has already been read" errors.
 
-> **Graceful fallback**: If ByteBuddy self-attach fails (e.g., running on a JRE), the application starts without bytecode instrumentation. A warning is logged with instructions to use the manual `Traced*` wrappers instead.
-
-#### Vert.x 3: Manual wrappers (all versions)
-
-For environments where ByteBuddy self-attach is not available, or for fine-grained control, use the `Traced*` wrapper APIs:
-
-```java
-import io.last9.tracing.otel.v3.TracedRouter;
-Router router = TracedRouter.create(vertx);
-```
-
-See the [Outgoing HTTP Tracing](#vert.x-3-outgoing-http-tracing), [Database Tracing](#vertx-3-database-tracing), and [Kafka Tracing](#vertx-3-kafka-tracing) sections for details on each wrapper.
-
-> **Do not add `BodyHandler`** when using `TracedRouter`: it buffers the request body itself, so `ctx.getBodyAsJson()` works out of the box.
-
-#### Vert.x 4
-
-Replace `Router.router(vertx)` with `TracedRouter.create(vertx)` for route-pattern span names:
+**Vert.x 4**: Replace `Router.router(vertx)` with `TracedRouter.create(vertx)` for route-pattern span names. Vert.x 4's `VertxTracer` SPI handles HTTP server/client spans automatically; `TracedRouter` adds route-pattern span names (`GET /v1/users/:id` instead of just `GET`).
 
 ```java
 import io.last9.tracing.otel.v4.TracedRouter;
 Router router = TracedRouter.create(vertx);
 ```
-
-Vert.x 4's `VertxTracer` SPI handles HTTP server/client spans automatically. `TracedRouter` adds route-pattern span names (`GET /v1/users/:id` instead of just `GET`).
 
 ### 4. Set environment variables and run
 
@@ -310,7 +321,7 @@ Three components must all be in place for distributed traces to work:
 
 **With zero-code auto-instrumentation (v2.1.0+):**
 ```
-OtelLauncher (self-attaches ByteBuddy)
+Standalone agent (-javaagent:vertx3-otel-agent.jar) or OtelLauncher (self-attaches ByteBuddy)
   → Router.router(vertx) auto-instrumented (creates SERVER span)
   → RxJava2ContextPropagation (carries context across thread hops)
     → WebClient.create(vertx) auto-instrumented (creates CLIENT span + writes traceparent)
@@ -924,7 +935,7 @@ This library works with Vert.x's context model instead of fighting it — using 
 | `vertx4-rxjava3-otel-autoconfigure` | 11+ | 4.5+ | 3.x |
 | `vertx3-rxjava2-otel-autoconfigure` | 11+ | 3.9+ | 2.x |
 
-> **Zero-code instrumentation** (Vert.x 3, v2.1.0+) requires a **JDK** runtime, not a JRE. ByteBuddy self-attach uses the JDK Attach API (`com.sun.tools.attach`). If running on a JRE, the application falls back to manual `Traced*` wrapper mode with a warning logged.
+> **Zero-code instrumentation** (Vert.x 3, v2.1.0+): The standalone agent (`-javaagent:vertx3-otel-agent.jar`) works on both **JDK and JRE** with full classloader isolation. The `OtelLauncher` self-attach approach requires a **JDK** (Attach API). If self-attach fails on a JRE, the application falls back to manual `Traced*` wrapper mode with a warning logged.
 
 ## License
 

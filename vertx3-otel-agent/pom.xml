@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.last9</groupId>
+        <artifactId>vertx-otel-autoconfigure</artifactId>
+        <version>2.1.0-beta.1</version>
+    </parent>
+
+    <artifactId>vertx3-otel-agent</artifactId>
+    <packaging>jar</packaging>
+
+    <name>Vert.x 3 OpenTelemetry Agent</name>
+    <description>
+        Standalone Java agent for zero-code OpenTelemetry tracing in Vert.x 3 applications.
+        Uses classloader isolation to prevent classpath conflicts.
+        Usage: java -javaagent:vertx3-otel-agent.jar -jar app.jar
+    </description>
+
+    <dependencies>
+        <!-- Library module — provided scope: ensures build order without bundling.
+             The shaded fat JAR is embedded in inst/ via antrun below. -->
+        <dependency>
+            <groupId>io.last9</groupId>
+            <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+
+            <!-- Embed the library fat JAR inside inst/ directory.
+                 This JAR is loaded by AgentClassLoader in an isolated classloader,
+                 so its classes never appear on the system classloader. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>embed-library-jar</id>
+                        <phase>prepare-package</phase>
+                        <goals><goal>run</goal></goals>
+                        <configuration>
+                            <target>
+                                <mkdir dir="${project.build.outputDirectory}/inst"/>
+                                <copy file="${project.basedir}/../vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${project.version}.jar"
+                                      tofile="${project.build.outputDirectory}/inst/agent-impl.jar"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Package with agent manifest entries.
+                 Only AgentBootstrap + AgentClassLoader are at standard class locations.
+                 Everything else is inside inst/agent-impl.jar. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Premain-Class>io.last9.tracing.otel.agent.AgentBootstrap</Premain-Class>
+                            <Agent-Class>io.last9.tracing.otel.agent.AgentBootstrap</Agent-Class>
+                            <Can-Redefine-Classes>true</Can-Redefine-Classes>
+                            <Can-Retransform-Classes>true</Can-Retransform-Classes>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+
+            <!-- Source JAR for releases -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+            </plugin>
+
+            <!-- Skip surefire — no tests in agent module -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

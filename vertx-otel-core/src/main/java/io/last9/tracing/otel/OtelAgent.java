@@ -1,33 +1,48 @@
 package io.last9.tracing.otel;
 
 import java.lang.instrument.Instrumentation;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Java agent entry point for zero-touch OpenTelemetry initialization.
  *
- * <p>Attach this agent with {@code -javaagent:/path/to/vertx4-rxjava3-otel-autoconfigure-2.0.0.jar}
- * (or the v3 equivalent). The JVM invokes {@link #premain} before the application's
- * {@code main} method, ensuring the OTel SDK is initialized before any Vert.x code runs.
+ * <h2>Usage Option 1: Library JAR as agent (separate from app)</h2>
+ * <pre>{@code
+ * java -javaagent:vertx3-rxjava2-otel-autoconfigure-2.1.0.jar -jar app.jar run com.example.MainVerticle
+ * }</pre>
  *
- * <p>If the application also calls {@link OtelSdkSetup#initialize()} programmatically
- * (e.g. via {@code OtelLauncher}), the second call is a no-op that returns the cached instance.
+ * <h2>Usage Option 2: App fat JAR as its own agent (recommended)</h2>
+ * <p>When the app's fat JAR includes this library and carries {@code Premain-Class} in its
+ * manifest, a single JAR serves as both agent and application — no classpath conflicts:
+ * <pre>{@code
+ * java -javaagent:app.jar -jar app.jar run com.example.MainVerticle
+ * }</pre>
+ * <p>Add to your shade plugin's {@code ManifestResourceTransformer}:
+ * <pre>{@code
+ * <manifestEntries>
+ *     <Premain-Class>io.last9.tracing.otel.OtelAgent</Premain-Class>
+ *     <Can-Redefine-Classes>true</Can-Redefine-Classes>
+ *     <Can-Retransform-Classes>true</Can-Retransform-Classes>
+ * </manifestEntries>
+ * }</pre>
  *
- * <h2>Vert.x 4 — zero-code instrumentation</h2>
- * <p>Because Vert.x 4 discovers tracers via the {@code VertxTracer} SPI
- * ({@code META-INF/services}), adding this JAR as a {@code -javaagent} is sufficient for
- * full HTTP tracing with no application code changes. No bytecode manipulation is needed.
+ * <h2>How it works</h2>
+ * <p>The JVM invokes {@link #premain} before the application's {@code main} method.
+ * The {@code Instrumentation} handle is stored so that {@code OtelLauncher} (if used)
+ * can reuse it instead of attempting ByteBuddy self-attach.
  *
- * <h2>Vert.x 3 — zero-code instrumentation via ByteBuddy</h2>
- * <p>Vert.x 3 has no {@code VertxTracer} SPI. When the Vert.x 3 fat JAR is used as
- * a {@code -javaagent}, this agent automatically installs ByteBuddy class transformers
- * that intercept {@code Router.router(Vertx)} and {@code WebClient.create(Vertx)} to
- * add tracing without any application code changes. RxJava2 context propagation hooks
- * are also installed automatically.
+ * <h2>Vert.x 4</h2>
+ * <p>Vert.x 4 discovers tracers via the {@code VertxTracer} SPI, so adding this JAR
+ * as a {@code -javaagent} is sufficient for full HTTP tracing with no code changes.
  *
- * <p>Database, Kafka, Redis, and Aerospike clients still require manual wrapping
- * with the {@code Traced*} classes because they need domain-specific parameters.
+ * <h2>Vert.x 3</h2>
+ * <p>Vert.x 3 has no {@code VertxTracer} SPI. This agent installs ByteBuddy class
+ * transformers that intercept {@code Router.router(Vertx)}, {@code WebClient.create(Vertx)},
+ * Kafka, Aerospike, Redis, JDBC, and reactive SQL — all without application code changes.
+ *
+ * @see OtelSdkSetup
  */
 public final class OtelAgent {
 
@@ -37,33 +52,71 @@ public final class OtelAgent {
     private static final String VERTX3_INSTRUMENTER =
             "io.last9.tracing.otel.v3.agent.Vertx3Instrumenter";
 
+    /**
+     * Stores the Instrumentation handle from premain/agentmain so that OtelLauncher
+     * can reuse it without attempting ByteBuddy self-attach.
+     */
+    private static final AtomicReference<Instrumentation> INSTRUMENTATION = new AtomicReference<>();
+
     private OtelAgent() {}
+
+    /**
+     * Returns the {@code Instrumentation} handle if this agent was loaded via
+     * {@code -javaagent}, or {@code null} if the agent was not used.
+     *
+     * <p>This allows {@code OtelLauncher} to detect that the agent already ran
+     * and skip ByteBuddy self-attach.
+     */
+    public static Instrumentation getInstrumentation() {
+        return INSTRUMENTATION.get();
+    }
+
+    /**
+     * Stores the {@code Instrumentation} handle from an external agent (e.g., the
+     * standalone {@code vertx3-otel-agent}).
+     *
+     * <p>Called via reflection by {@code AgentBootstrap} to pass the Instrumentation
+     * handle across classloader boundaries without polluting {@code System.getProperties()}
+     * with non-String values.
+     */
+    public static void storeInstrumentation(Instrumentation inst) {
+        INSTRUMENTATION.set(inst);
+    }
 
     /**
      * Invoked by the JVM before the application main class when this JAR is used as a
      * {@code -javaagent}.
      *
-     * <p>Performs two steps:
-     * <ol>
-     *   <li>Initializes the OpenTelemetry SDK</li>
-     *   <li>If the Vert.x 3 instrumenter is on the classpath (i.e., this is the v3 fat JAR),
-     *       installs ByteBuddy class transformers for zero-code HTTP tracing</li>
-     * </ol>
-     *
      * @param agentArgs command-line args after the {@code =} in {@code -javaagent:jar=args}
-     * @param inst      the Instrumentation handle (passed to ByteBuddy for v3 instrumentation)
+     * @param inst      the Instrumentation handle from the JVM
      */
     public static void premain(String agentArgs, Instrumentation inst) {
+        INSTRUMENTATION.set(inst);
         log.info("OtelAgent: initializing OpenTelemetry before application startup");
+        initialize(inst);
+    }
+
+    /**
+     * Invoked when this agent is attached dynamically (e.g. via the Attach API).
+     *
+     * @param agentArgs agent arguments
+     * @param inst      the Instrumentation handle from the JVM
+     */
+    public static void agentmain(String agentArgs, Instrumentation inst) {
+        INSTRUMENTATION.set(inst);
+        log.info("OtelAgent: attached dynamically — initializing OpenTelemetry");
+        initialize(inst);
+    }
+
+    private static void initialize(Instrumentation inst) {
         try {
             OtelSdkSetup.initialize();
         } catch (Exception e) {
-            // Never abort the JVM launch — log and continue untraced rather than failing.
             log.error("OtelAgent: OpenTelemetry initialization failed — "
                     + "application will start WITHOUT tracing: {}", e.getMessage(), e);
         }
 
-        // Vert.x 3: install bytecode instrumentation for Router + WebClient.
+        // Vert.x 3: install bytecode instrumentation for Router, WebClient, Kafka, etc.
         // In the v4 fat JAR the class is absent and this block is silently skipped.
         try {
             Class<?> instrumenter = Class.forName(VERTX3_INSTRUMENTER);
