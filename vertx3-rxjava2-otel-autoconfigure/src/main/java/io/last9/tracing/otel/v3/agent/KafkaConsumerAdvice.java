@@ -1,7 +1,6 @@
 package io.last9.tracing.otel.v3.agent;
 
 import io.vertx.core.Handler;
-import io.vertx.kafka.client.consumer.KafkaConsumerRecord;
 import net.bytebuddy.asm.Advice;
 
 /**
@@ -10,16 +9,16 @@ import net.bytebuddy.asm.Advice;
  * <p>Intercepts the per-record handler registration and wraps it with a CONSUMER span
  * that extracts the topic, partition, offset, and traceparent from each record.
  *
- * <p>This enables zero-code consumer tracing — every record dispatched to the user's
- * handler automatically gets a CONSUMER span linked to the producer span.
+ * <p>Uses raw Handler type because KafkaReadStreamImpl.handler() takes
+ * Handler&lt;ConsumerRecord&lt;K,V&gt;&gt; (raw Kafka type).
  */
 public class KafkaConsumerAdvice {
 
     @SuppressWarnings("unchecked")
     @Advice.OnMethodEnter(suppress = Throwable.class)
     static void onEnter(
-            @Advice.Argument(value = 0, readOnly = false) Handler<KafkaConsumerRecord> handler) {
+            @Advice.Argument(value = 0, readOnly = false) Handler handler) {
 
-        handler = KafkaConsumerHelper.wrapHandler(handler);
+        handler = KafkaConsumerHelper.wrapRawHandler(handler);
     }
 }
