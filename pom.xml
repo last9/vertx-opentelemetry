@@ -132,6 +132,11 @@
                 <artifactId>byte-buddy</artifactId>
                 <version>${bytebuddy.version}</version>
             </dependency>
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy-agent</artifactId>
+                <version>${bytebuddy.version}</version>
+            </dependency>
 
             <!-- Test -->
             <dependency>
@@ -335,6 +340,7 @@
                                              Only used in the v3 fat JAR; shade silently skips
                                              artifacts not present in a module's dependency graph. -->
                                         <include>net.bytebuddy:byte-buddy</include>
+                                        <include>net.bytebuddy:byte-buddy-agent</include>
                                         <!-- Vert.x Micrometer integration + Micrometer core.
                                              Bundled so users get internal Vert.x metrics without
                                              adding any extra dependencies.

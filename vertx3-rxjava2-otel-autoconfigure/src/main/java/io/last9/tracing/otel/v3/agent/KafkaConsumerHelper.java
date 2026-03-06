@@ -16,6 +16,8 @@ import io.opentelemetry.semconv.SemanticAttributes;
 import io.vertx.core.Handler;
 import io.vertx.kafka.client.consumer.KafkaConsumerRecord;
 import io.vertx.kafka.client.producer.KafkaHeader;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Header;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -27,12 +29,13 @@ import java.util.WeakHashMap;
  * Helper methods called by {@link KafkaConsumerAdvice} to wrap per-record handlers
  * with CONSUMER spans.
  *
- * <p>Intercepts at {@code io.vertx.kafka.client.consumer.impl.KafkaReadStreamImpl.handler(Handler)}
- * to automatically wrap the user's record handler with tracing. Each record dispatched
- * to the handler gets a short-lived CONSUMER span with the topic, partition, offset, and
- * a link to the producer span (extracted from traceparent header).
- *
- * <p>Uses a WeakHashMap guard to prevent double-wrapping if the handler is set multiple times.
+ * <p>Supports two interception modes:
+ * <ul>
+ *   <li>{@link #wrapRawHandler(Handler)} — intercepts at KafkaReadStreamImpl level
+ *       where records are raw {@code ConsumerRecord<K,V>} (used by ByteBuddy agent)</li>
+ *   <li>{@link #wrapHandler(Handler)} — intercepts at Vert.x wrapper level where
+ *       records are {@code KafkaConsumerRecord} (used by unit tests)</li>
+ * </ul>
  */
 public final class KafkaConsumerHelper {
 
@@ -42,6 +45,7 @@ public final class KafkaConsumerHelper {
     private static final Set<Handler<?>> WRAPPED_HANDLERS = Collections.synchronizedSet(
             Collections.newSetFromMap(new WeakHashMap<>()));
 
+    /** TextMapGetter for Vert.x KafkaConsumerRecord (used in wrapHandler). */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static final TextMapGetter<KafkaConsumerRecord> RECORD_GETTER =
             new TextMapGetter<KafkaConsumerRecord>() {
@@ -70,13 +74,98 @@ public final class KafkaConsumerHelper {
                 }
             };
 
+    /** TextMapGetter for raw Kafka ConsumerRecord (used in wrapRawHandler). */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final TextMapGetter<ConsumerRecord> RAW_RECORD_GETTER =
+            new TextMapGetter<ConsumerRecord>() {
+                @Override
+                public Iterable<String> keys(ConsumerRecord record) {
+                    if (record.headers() == null) return Collections.emptyList();
+                    List<String> keys = new java.util.ArrayList<>();
+                    for (Header h : record.headers()) {
+                        keys.add(h.key());
+                    }
+                    return keys;
+                }
+
+                @Override
+                public String get(ConsumerRecord record, String key) {
+                    if (record == null || record.headers() == null) return null;
+                    Header header = record.headers().lastHeader(key);
+                    if (header == null || header.value() == null) return null;
+                    return new String(header.value(), StandardCharsets.UTF_8);
+                }
+            };
+
     private KafkaConsumerHelper() {}
 
     /**
-     * Wraps the given record handler with a CONSUMER span per record.
-     * Returns the original handler if already wrapped.
-     *
-     * <p>Uses raw types because ByteBuddy advice inlines with raw type references.
+     * Wraps a raw Kafka ConsumerRecord handler (from KafkaReadStreamImpl) with CONSUMER spans.
+     * This is called by ByteBuddy agent advice.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static Handler wrapRawHandler(Handler original) {
+        if (original == null || WRAPPED_HANDLERS.contains(original)) {
+            return original;
+        }
+
+        Handler wrapped = record -> {
+            if (!(record instanceof ConsumerRecord)) {
+                original.handle(record);
+                return;
+            }
+
+            ConsumerRecord cr = (ConsumerRecord) record;
+            OpenTelemetry otel = GlobalOpenTelemetry.get();
+            Tracer tracer = otel.getTracer(TRACER_NAME);
+
+            String topic = cr.topic() != null ? cr.topic() : "unknown";
+
+            var spanBuilder = tracer.spanBuilder(topic + " process")
+                    .setParent(Context.root())
+                    .setSpanKind(SpanKind.CONSUMER)
+                    .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
+                    .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, topic)
+                    .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
+                            SemanticAttributes.MessagingOperationValues.PROCESS)
+                    .setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
+                            (long) cr.partition())
+                    .setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_OFFSET,
+                            cr.offset());
+
+            if (cr.key() != null) {
+                spanBuilder.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_KEY,
+                        String.valueOf(cr.key()));
+            }
+
+            // Link to producer span via traceparent header
+            Context producerCtx = otel.getPropagators().getTextMapPropagator()
+                    .extract(Context.root(), cr, RAW_RECORD_GETTER);
+            SpanContext producerSpanCtx = Span.fromContext(producerCtx).getSpanContext();
+            if (producerSpanCtx.isValid()) {
+                spanBuilder.addLink(producerSpanCtx);
+            }
+
+            Span span = spanBuilder.startSpan();
+            try (Scope ignored = span.makeCurrent()) {
+                original.handle(record);
+            } catch (Throwable t) {
+                span.recordException(t,
+                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                span.setStatus(StatusCode.ERROR, t.getMessage());
+                throw t;
+            } finally {
+                span.end();
+            }
+        };
+
+        WRAPPED_HANDLERS.add(wrapped);
+        return wrapped;
+    }
+
+    /**
+     * Wraps a Vert.x KafkaConsumerRecord handler with CONSUMER spans.
+     * Used by unit tests and applications using Vert.x KafkaConsumerRecord API directly.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     public static Handler<KafkaConsumerRecord> wrapHandler(Handler<KafkaConsumerRecord> original) {

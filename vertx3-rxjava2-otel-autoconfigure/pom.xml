@@ -57,6 +57,11 @@
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy</artifactId>
         </dependency>
+        <!-- ByteBuddy Agent: self-attach for OtelLauncher (no -javaagent needed) -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy-agent</artifactId>
+        </dependency>
 
         <!-- Logback (provided via core, needed at test time for MdcTraceTurboFilter tests) -->
         <dependency>
