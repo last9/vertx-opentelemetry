@@ -46,9 +46,12 @@ java -javaagent:vertx3-otel-agent-2.1.0.jar -jar app.jar
 **No main class change, no manifest changes, works on JRE.** The agent uses classloader isolation (like the OTel Java agent) — only a tiny 2-class shim goes on the system classloader. All heavy dependencies (ByteBuddy, OTel SDK) are loaded in an isolated classloader from an embedded JAR.
 
 The agent automatically:
-1. Initializes the OTel SDK on the app classloader
-2. Installs RxJava2 context propagation hooks
-3. Installs ByteBuddy class transformers for Router, WebClient, Kafka, etc.
+1. Stores the `Instrumentation` handle via `OtelAgent.storeInstrumentation()` on the app classloader
+2. Initializes the OTel SDK on the app classloader
+3. Installs RxJava2 context propagation hooks
+4. Installs ByteBuddy class transformers for Router, WebClient, Kafka, Aerospike, Redis, JDBC, and reactive SQL clients
+
+If `OtelLauncher` is also used as main class, it detects that the agent already ran and becomes a no-op.
 
 Your app must include `vertx3-rxjava2-otel-autoconfigure` as a Maven dependency (the agent's inlined advice resolves helper classes from your app's classpath).
 
@@ -318,7 +321,7 @@ Three components must all be in place for distributed traces to work:
 
 **With zero-code auto-instrumentation (v2.1.0+):**
 ```
-OtelLauncher (self-attaches ByteBuddy)
+Standalone agent (-javaagent:vertx3-otel-agent.jar) or OtelLauncher (self-attaches ByteBuddy)
   → Router.router(vertx) auto-instrumented (creates SERVER span)
   → RxJava2ContextPropagation (carries context across thread hops)
     → WebClient.create(vertx) auto-instrumented (creates CLIENT span + writes traceparent)
@@ -932,7 +935,7 @@ This library works with Vert.x's context model instead of fighting it — using 
 | `vertx4-rxjava3-otel-autoconfigure` | 11+ | 4.5+ | 3.x |
 | `vertx3-rxjava2-otel-autoconfigure` | 11+ | 3.9+ | 2.x |
 
-> **Zero-code instrumentation** (Vert.x 3, v2.1.0+): The `-javaagent:app.jar` approach works on both **JDK and JRE**. The `OtelLauncher` self-attach approach requires a **JDK** (Attach API). If self-attach fails on a JRE, the application falls back to manual `Traced*` wrapper mode with a warning logged.
+> **Zero-code instrumentation** (Vert.x 3, v2.1.0+): The standalone agent (`-javaagent:vertx3-otel-agent.jar`) works on both **JDK and JRE** with full classloader isolation. The `OtelLauncher` self-attach approach requires a **JDK** (Attach API). If self-attach fails on a JRE, the application falls back to manual `Traced*` wrapper mode with a warning logged.
 
 ## License
 

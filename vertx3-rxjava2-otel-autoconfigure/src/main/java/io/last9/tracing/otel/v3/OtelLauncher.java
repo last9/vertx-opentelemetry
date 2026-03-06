@@ -55,19 +55,10 @@ public class OtelLauncher extends Launcher {
 
     @Override
     public void beforeStartingVertx(VertxOptions options) {
-        // Check if the standalone agent (vertx3-otel-agent) already handled everything.
-        // The agent stores Instrumentation via system property for cross-classloader access.
-        Object agentInst = System.getProperties().get("io.last9.otel.instrumentation");
-        if (agentInst instanceof Instrumentation) {
-            log.info("Last9 OTel Agent already initialized via -javaagent — OtelLauncher is a no-op");
-            return;
-        }
-
-        // Check if OtelAgent.premain() ran (same-classloader -javaagent:app.jar approach).
-        // SDK is initialized but RxJava hooks may need installation.
+        // Check if any agent (standalone vertx3-otel-agent or same-JAR OtelAgent) already ran.
+        // Both store the Instrumentation handle via OtelAgent.storeInstrumentation().
         if (OtelAgent.getInstrumentation() != null) {
-            log.info("OtelAgent already initialized via -javaagent — skipping SDK setup");
-            RxJava2ContextPropagation.install();
+            log.info("OTel Agent already initialized via -javaagent — OtelLauncher is a no-op");
             return;
         }
 

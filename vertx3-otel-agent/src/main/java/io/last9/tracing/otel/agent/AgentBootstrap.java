@@ -29,8 +29,8 @@ import java.util.jar.JarFile;
  *
  * <h2>What happens at startup</h2>
  * <ol>
- *   <li>Stores the {@code Instrumentation} handle via system property
- *       (accessible by {@code OtelLauncher} if also used)</li>
+ *   <li>Stores the {@code Instrumentation} handle via {@code OtelAgent.storeInstrumentation()}
+ *       on the app classloader (accessible by {@code OtelLauncher} if also used)</li>
  *   <li>Initializes the OTel SDK on the application classloader</li>
  *   <li>Installs RxJava2 context propagation hooks on the application classloader</li>
  *   <li>Creates an isolated classloader from the embedded library JAR</li>
@@ -70,9 +70,8 @@ public final class AgentBootstrap {
             "io.last9.tracing.otel.OtelSdkSetup";
     private static final String RX_PROPAGATION_CLASS =
             "io.last9.tracing.otel.v3.RxJava2ContextPropagation";
-
-    /** System property key for cross-classloader Instrumentation sharing. */
-    static final String INSTRUMENTATION_PROPERTY = "io.last9.otel.instrumentation";
+    private static final String OTEL_AGENT_CLASS =
+            "io.last9.tracing.otel.OtelAgent";
 
     private AgentBootstrap() {}
 
@@ -80,14 +79,14 @@ public final class AgentBootstrap {
      * Called by the JVM before the application's {@code main} method.
      */
     public static void premain(String agentArgs, Instrumentation inst) {
-        // Store instrumentation handle (cross-classloader via system property)
-        System.getProperties().put(INSTRUMENTATION_PROPERTY, inst);
-
         try {
-            // 1. Initialize OTel SDK + RxJava hooks on the app classloader
+            // 1. Store instrumentation handle on the app classloader's OtelAgent
+            storeInstrumentationOnAppClassLoader(inst);
+
+            // 2. Initialize OTel SDK + RxJava hooks on the app classloader
             initializeOnAppClassLoader();
 
-            // 2. Create isolated classloader and install ByteBuddy transformers
+            // 3. Create isolated classloader and install ByteBuddy transformers
             ClassLoader isolated = createIsolatedClassLoader();
             installTransformers(isolated, inst);
 
@@ -105,6 +104,20 @@ public final class AgentBootstrap {
      */
     public static void agentmain(String agentArgs, Instrumentation inst) {
         premain(agentArgs, inst);
+    }
+
+    /**
+     * Stores the {@code Instrumentation} handle via {@code OtelAgent} on the app classloader.
+     *
+     * <p>This avoids storing non-String objects in {@code System.getProperties()}, which
+     * causes warnings from libraries like c3p0 that iterate system properties expecting
+     * only String values.
+     */
+    private static void storeInstrumentationOnAppClassLoader(Instrumentation inst)
+            throws Exception {
+        ClassLoader appCL = ClassLoader.getSystemClassLoader();
+        Class<?> otelAgent = appCL.loadClass(OTEL_AGENT_CLASS);
+        otelAgent.getMethod("storeInstrumentation", Instrumentation.class).invoke(null, inst);
     }
 
     /**

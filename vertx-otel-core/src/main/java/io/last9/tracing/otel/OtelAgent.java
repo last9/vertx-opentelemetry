@@ -72,6 +72,18 @@ public final class OtelAgent {
     }
 
     /**
+     * Stores the {@code Instrumentation} handle from an external agent (e.g., the
+     * standalone {@code vertx3-otel-agent}).
+     *
+     * <p>Called via reflection by {@code AgentBootstrap} to pass the Instrumentation
+     * handle across classloader boundaries without polluting {@code System.getProperties()}
+     * with non-String values.
+     */
+    public static void storeInstrumentation(Instrumentation inst) {
+        INSTRUMENTATION.set(inst);
+    }
+
+    /**
      * Invoked by the JVM before the application main class when this JAR is used as a
      * {@code -javaagent}.
      *
