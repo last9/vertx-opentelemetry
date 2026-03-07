@@ -63,3 +63,22 @@ jobs:
             "vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-${TAG_VERSION}-sources.jar" \
             "vertx3-otel-agent/target/vertx3-otel-agent-${TAG_VERSION}.jar" \
             "vertx3-otel-agent/target/vertx3-otel-agent-${TAG_VERSION}-sources.jar"
+
+      - name: Set up Java for Maven Central publishing
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+
+      - name: Publish to Maven Central
+        env:
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn deploy -P release -DskipTests -B --no-transfer-progress

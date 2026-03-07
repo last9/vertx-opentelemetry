@@ -20,11 +20,12 @@ public class ReactiveSqlAdvice {
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     static void onEnter(
+            @Advice.This Object client,
             @Advice.Argument(0) String sql,
             @Advice.Local("otelSpan") Span span,
             @Advice.Local("otelScope") Scope scope) {
 
-        span = ReactiveSqlHelper.startSpan(sql);
+        span = ReactiveSqlHelper.startSpan(sql, client);
         if (span != null) {
             scope = span.makeCurrent();
         }

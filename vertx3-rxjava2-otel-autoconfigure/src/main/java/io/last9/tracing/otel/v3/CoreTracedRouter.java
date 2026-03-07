@@ -38,7 +38,10 @@ public final class CoreTracedRouter {
     private static final String SPAN_KEY = "otel.span";
     private static final String ROUTE_KEY = "otel.route";
 
-    private static final Set<Router> INSTRUMENTED = Collections.synchronizedSet(
+    /** Shared set of core Router instances that already have tracing handlers.
+     *  Package-private so that {@link TracedRouter} can register its underlying core
+     *  Router to prevent double instrumentation when both advices fire. */
+    static final Set<Router> INSTRUMENTED = Collections.synchronizedSet(
             Collections.newSetFromMap(new WeakHashMap<>()));
 
     private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<>() {

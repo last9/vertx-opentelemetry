@@ -41,7 +41,7 @@ class ResteasyDispatchHelperTest {
 
         Span span = ResteasyDispatchHelper.startSpan(request);
         assertThat(span).isNotNull();
-        ResteasyDispatchHelper.endSpan(span, new StubHttpResponse(200), null);
+        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(200), null);
 
         List<SpanData> spans = spanExporter.getFinishedSpanItems();
         assertThat(spans).hasSize(1);
@@ -59,7 +59,7 @@ class ResteasyDispatchHelperTest {
     void startSpanCreatesSpanForPostRequest() {
         Span span = ResteasyDispatchHelper.startSpan(
                 new StubHttpRequest("POST", "/api/v1/teams", Collections.emptyMap()));
-        ResteasyDispatchHelper.endSpan(span, new StubHttpResponse(201), null);
+        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(201), null);
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getName()).isEqualTo("POST /api/v1/teams");
@@ -69,7 +69,7 @@ class ResteasyDispatchHelperTest {
     void endSpanRecordsResponseStatus() {
         Span span = ResteasyDispatchHelper.startSpan(
                 new StubHttpRequest("GET", "/api/health", Collections.emptyMap()));
-        ResteasyDispatchHelper.endSpan(span, new StubHttpResponse(200), null);
+        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(200), null);
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getAttributes().get(AttributeKey.longKey("http.response.status_code")))
@@ -80,7 +80,7 @@ class ResteasyDispatchHelperTest {
     void endSpanSetsErrorStatusForServerError() {
         Span span = ResteasyDispatchHelper.startSpan(
                 new StubHttpRequest("GET", "/api/fail", Collections.emptyMap()));
-        ResteasyDispatchHelper.endSpan(span, new StubHttpResponse(500), null);
+        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(500), null);
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
@@ -91,7 +91,7 @@ class ResteasyDispatchHelperTest {
         Span span = ResteasyDispatchHelper.startSpan(
                 new StubHttpRequest("GET", "/api/crash", Collections.emptyMap()));
         RuntimeException error = new RuntimeException("null pointer");
-        ResteasyDispatchHelper.endSpan(span, new StubHttpResponse(500), error);
+        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(500), error);
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
@@ -106,7 +106,7 @@ class ResteasyDispatchHelperTest {
         // Between startSpan and endSpan, the span should be current
         assertThat(Span.current()).isSameAs(span);
 
-        ResteasyDispatchHelper.endSpan(span, new StubHttpResponse(200), null);
+        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(200), null);
 
         // After endSpan, the scope should be closed
         assertThat(Span.current()).isNotSameAs(span);
@@ -119,7 +119,7 @@ class ResteasyDispatchHelperTest {
 
         Span span = ResteasyDispatchHelper.startSpan(
                 new StubHttpRequest("GET", "/api/traced", headers));
-        ResteasyDispatchHelper.endSpan(span, new StubHttpResponse(200), null);
+        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(200), null);
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getParentSpanId()).isEqualTo("b7ad6b7169203331");
@@ -132,7 +132,7 @@ class ResteasyDispatchHelperTest {
         Span span = ResteasyDispatchHelper.startSpan(
                 new StubHttpRequest(null, "/api/test", Collections.emptyMap()));
         assertThat(span).isNotNull();
-        ResteasyDispatchHelper.endSpan(span, new StubHttpResponse(200), null);
+        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(200), null);
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getName()).isEqualTo("UNKNOWN /api/test");
@@ -140,7 +140,7 @@ class ResteasyDispatchHelperTest {
 
     @Test
     void endSpanHandlesNullSpan() {
-        ResteasyDispatchHelper.endSpan(null, new StubHttpResponse(200), null);
+        ResteasyDispatchHelper.endSpan(null, null, new StubHttpResponse(200), null);
         assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
     }
 
@@ -148,7 +148,7 @@ class ResteasyDispatchHelperTest {
     void endSpanHandlesNullResponse() {
         Span span = ResteasyDispatchHelper.startSpan(
                 new StubHttpRequest("GET", "/api/test", Collections.emptyMap()));
-        ResteasyDispatchHelper.endSpan(span, null, null);
+        ResteasyDispatchHelper.endSpan(span, null, null, null);
 
         // Span should still be created and ended, just without status code
         assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);

@@ -138,6 +138,14 @@ public final class TracedRouter {
         if (!INSTRUMENTED.add(router)) {
             return;
         }
+        // The RxJava2 Router.router(vertx) internally calls core Router.router(vertx.getDelegate()).
+        // CoreRouterAdvice fires on that inner call BEFORE RouterAdvice fires on the outer call.
+        // If the core Router is already instrumented, skip — the core tracing handler is sufficient.
+        // If not yet instrumented, register it to prevent CoreRouterAdvice from adding a second handler.
+        if (!CoreTracedRouter.INSTRUMENTED.add(router.getDelegate())) {
+            // Core router already has tracing handlers — don't install a second set
+            return;
+        }
         installTracingHandler(router, openTelemetry);
     }
 

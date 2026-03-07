@@ -25,10 +25,11 @@ public class ResteasyDispatchAdvice {
 
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
     static void onExit(
+            @Advice.Argument(0) Object request,
             @Advice.Argument(1) Object response,
             @Advice.Thrown Throwable thrown,
             @Advice.Local("otelSpan") Span span) {
 
-        ResteasyDispatchHelper.endSpan(span, response, thrown);
+        ResteasyDispatchHelper.endSpan(span, request, response, thrown);
     }
 }

@@ -36,7 +36,7 @@ class ReactiveSqlHelperTest {
 
     @Test
     void startSpanCreatesClientSpanForSelectQuery() {
-        Span span = ReactiveSqlHelper.startSpan("SELECT * FROM users WHERE id = ?");
+        Span span = ReactiveSqlHelper.startSpan("SELECT * FROM users WHERE id = ?", null);
 
         assertThat(span).isNotNull();
         span.end();
@@ -55,7 +55,7 @@ class ReactiveSqlHelperTest {
 
     @Test
     void startSpanExtractsOperationFromSql() {
-        Span span = ReactiveSqlHelper.startSpan("INSERT INTO orders (product) VALUES (?)");
+        Span span = ReactiveSqlHelper.startSpan("INSERT INTO orders (product) VALUES (?)", null);
         assertThat(span).isNotNull();
         span.end();
 
@@ -67,7 +67,7 @@ class ReactiveSqlHelperTest {
     void startSpanReturnsNullWhenGuardIsSet() {
         AgentGuard.IN_DB_TRACED_CALL.set(true);
 
-        Span span = ReactiveSqlHelper.startSpan("SELECT 1");
+        Span span = ReactiveSqlHelper.startSpan("SELECT 1", null);
 
         assertThat(span).isNull();
         assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
@@ -75,7 +75,7 @@ class ReactiveSqlHelperTest {
 
     @Test
     void startSpanHandlesNullSql() {
-        Span span = ReactiveSqlHelper.startSpan(null);
+        Span span = ReactiveSqlHelper.startSpan(null, null);
 
         assertThat(span).isNotNull();
         span.end();
@@ -86,7 +86,7 @@ class ReactiveSqlHelperTest {
 
     @Test
     void endSpanRecordsError() {
-        Span span = ReactiveSqlHelper.startSpan("SELECT 1");
+        Span span = ReactiveSqlHelper.startSpan("SELECT 1", null);
         Scope scope = span.makeCurrent();
 
         ReactiveSqlHelper.endSpan(span, scope, new RuntimeException("pool exhausted"));

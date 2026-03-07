@@ -14,6 +14,8 @@ import io.opentelemetry.context.propagation.TextMapPropagator;
 import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.util.Collections;
 import java.util.List;
@@ -152,14 +154,15 @@ public final class ResteasyDispatchHelper {
     }
 
     /**
-     * Ends the SERVER span, recording the response status and any exception.
+     * Ends the SERVER span, recording the response status, http.route, and any exception.
      * Closes the OTel scope stored by {@link #startSpan}.
      *
      * @param span        the span from startSpan (nullable)
+     * @param requestObj  the RESTEasy HttpRequest (for extracting matched route, nullable)
      * @param responseObj the RESTEasy HttpResponse (accessed via reflection, nullable)
      * @param thrown      exception thrown during dispatch (nullable)
      */
-    public static void endSpan(Span span, Object responseObj, Throwable thrown) {
+    public static void endSpan(Span span, Object requestObj, Object responseObj, Throwable thrown) {
         if (span == null) return;
 
         try {
@@ -182,6 +185,23 @@ public final class ResteasyDispatchHelper {
                     // Response may not support getStatus() in some RESTEasy versions
                 }
             }
+
+            // Extract JAX-RS route from matched resource @Path annotations
+            if (requestObj != null) {
+                String route = extractJaxRsRoute(requestObj);
+                if (route != null) {
+                    span.setAttribute(SemanticAttributes.HTTP_ROUTE, route);
+                    // Update span name to use route template instead of literal path
+                    String method = null;
+                    try {
+                        method = (String) requestObj.getClass()
+                                .getMethod("getHttpMethod").invoke(requestObj);
+                    } catch (Exception ignored) {}
+                    if (method != null) {
+                        span.updateName(method + " " + route);
+                    }
+                }
+            }
         } finally {
             Scope scope = SCOPE_HOLDER.get();
             if (scope != null) {
@@ -190,5 +210,112 @@ public final class ResteasyDispatchHelper {
             }
             span.end();
         }
+    }
+
+    /**
+     * Extracts the JAX-RS route template from matched resource classes.
+     * Uses reflection to call {@code UriInfo.getMatchedResources()} and then
+     * reads {@code @Path} annotations from the matched resource class and its methods.
+     *
+     * @param requestObj the RESTEasy HttpRequest
+     * @return the route template (e.g., "/api/v1/contests/{id}/leaderboard"), or null
+     */
+    private static String extractJaxRsRoute(Object requestObj) {
+        try {
+            Object uriInfo = requestObj.getClass().getMethod("getUri").invoke(requestObj);
+            if (uriInfo == null) return null;
+
+            // Get matched resource instances (ordered from most specific to root)
+            @SuppressWarnings("unchecked")
+            List<Object> matchedResources = (List<Object>) uriInfo.getClass()
+                    .getMethod("getMatchedResources").invoke(uriInfo);
+            if (matchedResources == null || matchedResources.isEmpty()) return null;
+
+            // The first matched resource is the most specific (the one handling the request)
+            Object resource = matchedResources.get(0);
+            Class<?> resourceClass = resource.getClass();
+
+            // Get class-level @Path
+            String classPath = getPathAnnotationValue(resourceClass);
+
+            // Get the actual request path and HTTP method to find the matching method
+            String httpMethod = (String) requestObj.getClass()
+                    .getMethod("getHttpMethod").invoke(requestObj);
+            String requestPath = (String) uriInfo.getClass()
+                    .getMethod("getPath").invoke(uriInfo);
+
+            // Find the method that matches the request by checking JAX-RS annotations
+            String methodPath = findMatchingMethodPath(resourceClass, httpMethod, requestPath, classPath);
+
+            if (classPath == null && methodPath == null) return null;
+
+            StringBuilder route = new StringBuilder();
+            if (classPath != null) {
+                if (!classPath.startsWith("/")) route.append("/");
+                route.append(classPath);
+            }
+            if (methodPath != null) {
+                if (route.length() > 0 && !methodPath.startsWith("/")) route.append("/");
+                route.append(methodPath);
+            }
+
+            // Normalize: convert {param} to JAX-RS template format (already correct)
+            String result = route.toString();
+            // Ensure single leading slash
+            while (result.startsWith("//")) result = result.substring(1);
+            return result.isEmpty() ? null : result;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Gets the value of a {@code @Path} annotation on a class, if present.
+     */
+    private static String getPathAnnotationValue(Class<?> clazz) {
+        for (Annotation ann : clazz.getAnnotations()) {
+            if (ann.annotationType().getName().equals("javax.ws.rs.Path") ||
+                    ann.annotationType().getName().equals("jakarta.ws.rs.Path")) {
+                try {
+                    return (String) ann.annotationType().getMethod("value").invoke(ann);
+                } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Finds the JAX-RS method that matches the HTTP method and returns its @Path value.
+     */
+    private static String findMatchingMethodPath(Class<?> resourceClass, String httpMethod,
+                                                  String requestPath, String classPath) {
+        if (httpMethod == null) return null;
+
+        for (Method m : resourceClass.getMethods()) {
+            // Check if this method has the matching HTTP method annotation (@GET, @POST, etc.)
+            boolean hasHttpMethod = false;
+            for (Annotation ann : m.getAnnotations()) {
+                String annName = ann.annotationType().getSimpleName();
+                if (annName.equals(httpMethod)) {
+                    hasHttpMethod = true;
+                    break;
+                }
+            }
+            if (!hasHttpMethod) continue;
+
+            // Get method-level @Path
+            for (Annotation ann : m.getAnnotations()) {
+                if (ann.annotationType().getName().equals("javax.ws.rs.Path") ||
+                        ann.annotationType().getName().equals("jakarta.ws.rs.Path")) {
+                    try {
+                        return (String) ann.annotationType().getMethod("value").invoke(ann);
+                    } catch (Exception ignored) {}
+                }
+            }
+
+            // Method matches HTTP verb but has no @Path — it handles the class-level path
+            return null;
+        }
+        return null;
     }
 }

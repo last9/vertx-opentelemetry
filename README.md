@@ -7,6 +7,16 @@ Drop-in OpenTelemetry instrumentation for Vert.x applications. Add the JAR, swap
 | Vert.x 4.5+ / RxJava 3 | `vertx4-rxjava3-otel-autoconfigure` |
 | Vert.x 3.9+ / RxJava 2 | `vertx3-rxjava2-otel-autoconfigure` |
 
+## What's New in v2.2.0
+
+All features below are **zero-code** — no application changes needed. Just update the agent JAR.
+
+- **DB span names follow OTel convention**: `{OPERATION} {db.name}.{table}` (e.g., `SELECT holdingdb.holdings`, `INSERT appdb.users`). The `db.name` is auto-extracted from the JDBC URL or reactive SQL connection options.
+- **RESTEasy (JAX-RS) `http.route` support**: SERVER spans from RESTEasy endpoints now include `http.route` with parameterized templates extracted from `@Path` annotations (e.g., `/api/v1/contests/{id}`). Span names update accordingly (e.g., `GET /api/v1/contests/{id}`).
+- **Core Router auto-instrumentation**: The agent now instruments `io.vertx.ext.web.Router` (non-RxJava core API) in addition to the RxJava2 Router. A shared deduplication mechanism prevents double-instrumentation when both Router types share the same underlying instance.
+- **JDBC and reactive SQL `db.name` attribute**: Both `JdbcClientHelper` and `ReactiveSqlHelper` now extract and set the `db.name` span attribute — JDBC from the config URL, reactive SQL from connection options.
+- **Double-instrumentation fix**: When an RxJava2 `Router.router(vertx)` internally creates a core Router, both advices used to fire and install duplicate `bodyHandler()` calls (causing "Request has already been read" errors). Fixed via a shared `INSTRUMENTED` set.
+
 ## Quick Start
 
 ### 1. Add the dependency
@@ -18,14 +28,14 @@ The library is published to [Maven Central](https://central.sonatype.com/search?
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>2.1.0</version>
+    <version>2.2.0-beta.1</version>
 </dependency>
 
 <!-- OR Vert.x 3 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>2.1.0</version>
+    <version>2.2.0-beta.1</version>
 </dependency>
 ```
 
@@ -40,7 +50,7 @@ Choose one of three options (Vert.x 3). Vert.x 4 users: skip to [Step 3](#3-star
 Download `vertx3-otel-agent-<version>.jar` from [Releases](https://github.com/last9/vertx-opentelemetry/releases) and run with `-javaagent`:
 
 ```bash
-java -javaagent:vertx3-otel-agent-2.1.0.jar -jar app.jar
+java -javaagent:vertx3-otel-agent-2.2.0-beta.1.jar -jar app.jar
 ```
 
 <details>
@@ -51,7 +61,7 @@ java -javaagent:vertx3-otel-agent-2.1.0.jar -jar app.jar
 ```bash
 # In EC2 user-data or systemd ExecStartPre:
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.1.0/vertx3-otel-agent-2.1.0.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.1/vertx3-otel-agent-2.2.0-beta.1.jar
 
 java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar app.jar
 ```
@@ -63,7 +73,7 @@ Add the JAR to your AMI during build (e.g., Packer). No download at boot time �
 ```bash
 # In your Packer provisioner or AMI build script:
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.1.0/vertx3-otel-agent-2.1.0.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.1/vertx3-otel-agent-2.2.0-beta.1.jar
 ```
 
 Then in your systemd unit or startup script:
@@ -194,7 +204,10 @@ Logback OpenTelemetry appender installed for log export
 - **RxJava context propagation** — trace context flows across `subscribeOn`, `observeOn`, `flatMap`, and all operators
 - **Kafka producer + consumer tracing** (Vert.x 3 + 4) — `TracedKafkaProducer` creates PRODUCER spans with `traceparent` header propagation; `TracedKafkaConsumer` creates CONSUMER spans per batch with one-line setup
 - **Database tracing** (Vert.x 3) — auto-instrumented wrappers for reactive MySQL (`TracedMySQLClient`), legacy SQL (`TracedSQLClient`), Redis (`TracedRedisClient`), and Aerospike (`TracedAerospikeClient`), plus generic `DbTracing` for any other database
+- **OTel-compliant DB span names** (v2.2.0+) — DB spans follow the `{OPERATION} {db.name}.{table}` convention (e.g., `SELECT holdingdb.holdings`), with `db.name` extracted from the JDBC URL or reactive SQL connection options
 - **Database tracing** (Vert.x 4) — `TracedDBPool` wraps any reactive SQL pool (PostgreSQL, MySQL) with CLIENT spans including the SQL statement; `DbTracing` for wrapping arbitrary operations with custom span names
+- **RESTEasy (JAX-RS) `http.route` extraction** (v2.2.0+) — auto-extracts route templates from `@Path` annotations (e.g., `/api/v1/contests/{id}`) and sets `http.route` on SERVER spans
+- **Core Router instrumentation** (v2.2.0+) — auto-instruments `io.vertx.ext.web.Router` (non-RxJava) in addition to the RxJava2 `Router`, with shared deduplication to prevent double-instrumentation
 - **Generic RxJava2 client wrapping** (Vert.x 3) — `TracedRxClient.wrap()` adds CLIENT spans to any RxJava2 interface via dynamic proxy — works with any third-party MySQL/Aerospike/custom data-access client
 - **Auto-tracing WebClient** (Vert.x 3) — `TracedWebClient` creates CLIENT spans and injects `traceparent` on every outgoing request — no per-call wrapping needed
 - **Worker thread context propagation** (Vert.x 3) — `TracedVertx.rxExecuteBlocking()` carries OTel context from event loop to worker threads so blocking calls produce connected spans
