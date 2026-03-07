@@ -18,14 +18,14 @@ The library is published to [Maven Central](https://central.sonatype.com/search?
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>1.5.0</version>
+    <version>2.1.0</version>
 </dependency>
 
 <!-- OR Vert.x 3 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>1.5.0</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
