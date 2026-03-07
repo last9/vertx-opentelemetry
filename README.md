@@ -11,6 +11,19 @@ Drop-in OpenTelemetry instrumentation for Vert.x applications. Add the JAR, swap
 
 All features below are **zero-code** — no application changes needed. Just update the agent JAR.
 
+### v2.2.0-beta.2
+
+- **HTTP client traceparent injection**: Outgoing Vert.x HTTP client requests now carry the `traceparent` header for cross-service W3C trace context propagation. Span lifecycle covers the full round-trip — from `end()` to response/exception.
+- **HTTP client response status code**: CLIENT spans now include `http.status_code` from the actual response. 4xx/5xx responses set the span status to ERROR.
+- **Aerospike batch operation coverage**: Batch operations (`get(BatchPolicy, Key[])`, `exists(BatchPolicy, Key[])`, `getHeader(BatchPolicy, Key[])`) are now instrumented — covers Dream11's `bulkGetBins()` at 20K rpm.
+- **Jedis Redis instrumentation**: Intercepts `redis.clients.jedis.Connection.sendCommand()` — covers all Jedis APIs (Jedis, JedisPool, JedisCluster, Pipeline).
+- **Lettuce Redis instrumentation**: Intercepts `AbstractRedisAsyncCommands.dispatch()` — covers sync/async/reactive Lettuce APIs.
+- **Raw JDBC Statement instrumentation**: Intercepts `java.sql.Statement.execute*()` methods — covers any JDBC driver with auto-detected `db.system` and `db.name` from connection metadata.
+- **Auto log-trace correlation**: `MdcTraceTurboFilter` and `OpenTelemetryAppender` are auto-installed into Logback at runtime — no `logback.xml` changes needed for agent-only deployments.
+- **Agent-only mode**: Applications can use `-javaagent` with zero compile dependency on this library. All instrumentation is injected at runtime via ByteBuddy.
+
+### v2.2.0-beta.1
+
 - **DB span names follow OTel convention**: `{OPERATION} {db.name}.{table}` (e.g., `SELECT holdingdb.holdings`, `INSERT appdb.users`). The `db.name` is auto-extracted from the JDBC URL or reactive SQL connection options.
 - **RESTEasy (JAX-RS) `http.route` support**: SERVER spans from RESTEasy endpoints now include `http.route` with parameterized templates extracted from `@Path` annotations (e.g., `/api/v1/contests/{id}`). Span names update accordingly (e.g., `GET /api/v1/contests/{id}`).
 - **Core Router auto-instrumentation**: The agent now instruments `io.vertx.ext.web.Router` (non-RxJava core API) in addition to the RxJava2 Router. A shared deduplication mechanism prevents double-instrumentation when both Router types share the same underlying instance.
@@ -28,14 +41,14 @@ The library is published to [Maven Central](https://central.sonatype.com/search?
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>2.2.0-beta.1</version>
+    <version>2.2.0-beta.2</version>
 </dependency>
 
 <!-- OR Vert.x 3 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>2.2.0-beta.1</version>
+    <version>2.2.0-beta.2</version>
 </dependency>
 ```
 
@@ -50,7 +63,7 @@ Choose one of three options (Vert.x 3). Vert.x 4 users: skip to [Step 3](#3-star
 Download `vertx3-otel-agent-<version>.jar` from [Releases](https://github.com/last9/vertx-opentelemetry/releases) and run with `-javaagent`:
 
 ```bash
-java -javaagent:vertx3-otel-agent-2.2.0-beta.1.jar -jar app.jar
+java -javaagent:vertx3-otel-agent-2.2.0-beta.2.jar -jar app.jar
 ```
 
 <details>
@@ -61,7 +74,7 @@ java -javaagent:vertx3-otel-agent-2.2.0-beta.1.jar -jar app.jar
 ```bash
 # In EC2 user-data or systemd ExecStartPre:
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.1/vertx3-otel-agent-2.2.0-beta.1.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.2/vertx3-otel-agent-2.2.0-beta.2.jar
 
 java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar app.jar
 ```
@@ -73,7 +86,7 @@ Add the JAR to your AMI during build (e.g., Packer). No download at boot time �
 ```bash
 # In your Packer provisioner or AMI build script:
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.1/vertx3-otel-agent-2.2.0-beta.1.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.2/vertx3-otel-agent-2.2.0-beta.2.jar
 ```
 
 Then in your systemd unit or startup script:
@@ -90,11 +103,11 @@ The agent automatically:
 1. Stores the `Instrumentation` handle via `OtelAgent.storeInstrumentation()` on the app classloader
 2. Initializes the OTel SDK on the app classloader
 3. Installs RxJava2 context propagation hooks
-4. Installs ByteBuddy class transformers for Router, WebClient, Kafka, Aerospike, Redis, JDBC, and reactive SQL clients
+4. Installs ByteBuddy class transformers for Router, HTTP client, Kafka, Aerospike, Redis (Jedis + Lettuce), JDBC, reactive SQL, and RESTEasy
 
 If `OtelLauncher` is also used as main class, it detects that the agent already ran and becomes a no-op.
 
-Your app must include `vertx3-rxjava2-otel-autoconfigure` as a Maven dependency (the agent's inlined advice resolves helper classes from your app's classpath).
+**No compile dependency required**: The agent embeds all helper classes and injects them onto the system classloader at startup. Your app only needs `-javaagent` — no Maven dependency on this library is needed (though adding it enables `Traced*` wrapper APIs for fine-grained control).
 
 #### Option B: OtelLauncher as main class (no JVM flags, requires JDK)
 

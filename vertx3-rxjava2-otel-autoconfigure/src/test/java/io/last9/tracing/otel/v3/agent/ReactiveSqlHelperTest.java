@@ -101,4 +101,82 @@ class ReactiveSqlHelperTest {
         ReactiveSqlHelper.endSpan(null, null, null);
         assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
     }
+
+    // --- extractDbInfo tests (db.system and db.name detection via reflection) ---
+
+    /**
+     * Stub that simulates a MySQL pool client — class name contains "mysql".
+     * Has a field with getDatabase() method to simulate SqlConnectOptions.
+     */
+    @SuppressWarnings("unused")
+    static class StubMysqlPoolClient {
+        final StubConnectOptions connectOptions = new StubConnectOptions("mydb");
+    }
+
+    @SuppressWarnings("unused")
+    static class StubPgPoolClient {
+        final StubConnectOptions connectOptions = new StubConnectOptions("analytics");
+    }
+
+    @SuppressWarnings("unused")
+    static class StubConnectOptions {
+        private final String database;
+        StubConnectOptions(String database) { this.database = database; }
+        public String getDatabase() { return database; }
+    }
+
+    @Test
+    void startSpanDetectsMysqlFromClassName() {
+        // Class name doesn't contain "pg" or "postgres", defaults to mysql
+        Span span = ReactiveSqlHelper.startSpan("SELECT * FROM users", new StubMysqlPoolClient());
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.system")))
+                .isEqualTo("mysql");
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.name")))
+                .isEqualTo("mydb");
+        assertThat(sd.getName()).isEqualTo("SELECT mydb.users");
+    }
+
+    @Test
+    void startSpanDetectsPostgresqlFromClassName() {
+        // StubPgPoolClient contains "pg" in class name
+        Span span = ReactiveSqlHelper.startSpan("INSERT INTO events (type) VALUES (?)",
+                new StubPgPoolClient());
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.system")))
+                .isEqualTo("postgresql");
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.name")))
+                .isEqualTo("analytics");
+    }
+
+    @Test
+    void startSpanDefaultsToMysqlWhenNullClient() {
+        Span span = ReactiveSqlHelper.startSpan("SELECT 1", null);
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.system")))
+                .isEqualTo("mysql");
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.name")))
+                .isNull();
+    }
+
+    @Test
+    void endSpanSuccessNoError() {
+        Span span = ReactiveSqlHelper.startSpan("SELECT 1", null);
+        Scope scope = span.makeCurrent();
+
+        ReactiveSqlHelper.endSpan(span, scope, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getStatus().getStatusCode()).isNotEqualTo(StatusCode.ERROR);
+        assertThat(sd.getEvents()).isEmpty();
+    }
 }
