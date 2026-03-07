@@ -41,6 +41,7 @@ import static net.bytebuddy.matcher.ElementMatchers.*;
  *   <li>Redis — {@code RedisConnectionImpl.send()}</li>
  *   <li>JDBC (legacy) — {@code JDBCClientImpl.query/update/...}</li>
  *   <li>MySQL reactive — {@code SqlClientBase.query/preparedQuery}</li>
+ *   <li>RESTEasy (JAX-RS) — {@code SynchronousDispatcher.invoke()} for SERVER spans</li>
  * </ul>
  *
  * <p>This class is discovered by {@link io.last9.tracing.otel.OtelAgent} via reflection.
@@ -141,6 +142,7 @@ public final class Vertx3Instrumenter {
         installRedisInstrumentation(inst, listener);
         installJdbcInstrumentation(inst, listener);
         installReactiveSqlInstrumentation(inst, listener);
+        installResteasyInstrumentation(inst, listener);
     }
 
     /**
@@ -275,6 +277,38 @@ public final class Vertx3Instrumenter {
         } catch (Throwable t) {
             log.debug("Vertx3Instrumenter: JDBC instrumentation skipped — "
                     + "vertx-jdbc-client not on classpath: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * RESTEasy (JAX-RS): intercept {@code SynchronousDispatcher.invoke(HttpRequest, HttpResponse)}
+     * to create SERVER spans for JAX-RS endpoints running on Vert.x.
+     *
+     * <p>This covers applications that use RESTEasy for business routes instead of
+     * the Vert.x Router (e.g., fantasy-tour-v1). The dispatch is synchronous, so
+     * the OTel context is current during the entire resource method execution.
+     */
+    private static void installResteasyInstrumentation(Instrumentation inst,
+                                                        AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("org.jboss.resteasy.core.SynchronousDispatcher"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(ResteasyDispatchAdvice.class)
+                                    .on(named("invoke")
+                                            .and(takesArguments(2))
+                                            .and(takesArgument(0, named(
+                                                    "org.jboss.resteasy.spi.HttpRequest")))
+                                            .and(takesArgument(1, named(
+                                                    "org.jboss.resteasy.spi.HttpResponse"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: RESTEasy dispatcher instrumentation installed");
+        } catch (Throwable t) {
+            log.debug("Vertx3Instrumenter: RESTEasy instrumentation skipped — "
+                    + "resteasy not on classpath: {}", t.getMessage());
         }
     }
 
