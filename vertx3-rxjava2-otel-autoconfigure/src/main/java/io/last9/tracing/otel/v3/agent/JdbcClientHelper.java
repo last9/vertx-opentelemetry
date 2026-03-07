@@ -41,7 +41,7 @@ public final class JdbcClientHelper {
 
         Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
 
-        String spanName = "jdbc " + truncateSql(sql);
+        String spanName = io.last9.tracing.otel.v3.SqlSpanName.fromSql(sql);
 
         return tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
@@ -69,14 +69,4 @@ public final class JdbcClientHelper {
         }
     }
 
-    private static String truncateSql(String sql) {
-        if (sql == null) return "SQL";
-        // Extract just the operation keyword (SELECT, INSERT, UPDATE, DELETE, etc.)
-        String trimmed = sql.trim();
-        int spaceIdx = trimmed.indexOf(' ');
-        if (spaceIdx > 0) {
-            return trimmed.substring(0, spaceIdx).toUpperCase();
-        }
-        return trimmed.length() > 50 ? trimmed.substring(0, 50) : trimmed;
-    }
 }

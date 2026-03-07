@@ -55,7 +55,7 @@ class TracedSQLConnectionTest {
         conn(rs(), null, null).rxQuery("SELECT * FROM orders").blockingGet();
 
         SpanData span = single();
-        assertThat(span.getName()).isEqualTo("mysql SELECT * FROM orders");
+        assertThat(span.getName()).isEqualTo("SELECT orders_db.orders");
         assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
     }
 
@@ -65,7 +65,7 @@ class TracedSQLConnectionTest {
                 .rxQueryWithParams("SELECT * FROM orders WHERE id = ?", new JsonArray().add(1))
                 .blockingGet();
 
-        assertThat(single().getName()).contains("SELECT * FROM orders WHERE id = ?");
+        assertThat(single().getName()).isEqualTo("SELECT orders_db.orders");
     }
 
     @Test
@@ -83,7 +83,7 @@ class TracedSQLConnectionTest {
                         new JsonArray().add(42))
                 .blockingGet();
 
-        assertThat(single().getName()).contains("SELECT name FROM users WHERE id = ?");
+        assertThat(single().getName()).isEqualTo("SELECT orders_db.users");
     }
 
     @Test
@@ -91,7 +91,7 @@ class TracedSQLConnectionTest {
         // rxQueryStream returns Single<SQLRowStream> — stub returns null (valid in test)
         conn(null, null, null).rxQueryStream("SELECT id FROM large_table").blockingGet();
 
-        assertThat(single().getName()).contains("SELECT id FROM large_table");
+        assertThat(single().getName()).isEqualTo("SELECT orders_db.large_table");
     }
 
     // ---- Update ----
@@ -102,7 +102,7 @@ class TracedSQLConnectionTest {
                 .rxUpdate("DELETE FROM sessions WHERE expired = true")
                 .blockingGet();
 
-        assertThat(single().getName()).contains("DELETE FROM sessions");
+        assertThat(single().getName()).isEqualTo("DELETE orders_db.sessions");
     }
 
     @Test
@@ -112,7 +112,7 @@ class TracedSQLConnectionTest {
                         new JsonArray().add(false).add(7))
                 .blockingGet();
 
-        assertThat(single().getName()).contains("UPDATE users SET active");
+        assertThat(single().getName()).isEqualTo("UPDATE orders_db.users");
     }
 
     // ---- Call (stored procedures) ----
@@ -121,7 +121,7 @@ class TracedSQLConnectionTest {
     void rxCallCreatesSpan() {
         conn(rs(), null, null).rxCall("{CALL get_orders()}").blockingGet();
 
-        assertThat(single().getName()).contains("CALL get_orders");
+        assertThat(single().getName()).isEqualTo("mysql {CALL get_orders()}");
     }
 
     @Test
@@ -131,7 +131,7 @@ class TracedSQLConnectionTest {
                         new JsonArray())
                 .blockingGet();
 
-        assertThat(single().getName()).contains("CALL update_status");
+        assertThat(single().getName()).isEqualTo("mysql {CALL update_status(?)}");
     }
 
     // ---- Execute ----
@@ -141,7 +141,7 @@ class TracedSQLConnectionTest {
         conn(null, null, null).rxExecute("CREATE INDEX idx_user_id ON orders(user_id)")
                 .blockingAwait();
 
-        assertThat(single().getName()).contains("CREATE INDEX");
+        assertThat(single().getName()).isEqualTo("CREATE orders_db.idx_user_id");
     }
 
     // ---- Batch ----
@@ -155,7 +155,7 @@ class TracedSQLConnectionTest {
 
         conn(null, null, null).rxBatch(stmts).blockingGet();
 
-        assertThat(single().getName()).isEqualTo("mysql BATCH (3 statements)");
+        assertThat(single().getName()).isEqualTo("mysql BATCH (3 statements)");  // batch ops keep old format
     }
 
     @Test
@@ -167,7 +167,7 @@ class TracedSQLConnectionTest {
                 .rxBatchWithParams("INSERT INTO events (id) VALUES (?)", params)
                 .blockingGet();
 
-        assertThat(single().getName()).isEqualTo("mysql INSERT INTO events (id) VALUES (?) (batch 2)");
+        assertThat(single().getName()).isEqualTo("INSERT orders_db.events");
     }
 
     @Test
@@ -179,7 +179,7 @@ class TracedSQLConnectionTest {
                 .rxBatchCallableWithParams("{CALL proc(?)}", inArgs, outArgs)
                 .blockingGet();
 
-        assertThat(single().getName()).isEqualTo("mysql {CALL proc(?)} (batch callable 1)");
+        assertThat(single().getName()).isEqualTo("mysql {CALL proc(?)} (batch callable 1)");  // batch ops keep old format
     }
 
     // ---- Transaction ----
@@ -189,7 +189,7 @@ class TracedSQLConnectionTest {
         conn(null, null, null).rxRollback().blockingAwait();
 
         SpanData span = single();
-        assertThat(span.getName()).isEqualTo("mysql ROLLBACK");
+        assertThat(span.getName()).isEqualTo("ROLLBACK");
         assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
     }
 

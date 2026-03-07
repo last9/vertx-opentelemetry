@@ -45,7 +45,7 @@ class ReactiveSqlHelperTest {
         assertThat(spans).hasSize(1);
 
         SpanData sd = spans.get(0);
-        assertThat(sd.getName()).isEqualTo("mysql SELECT");
+        assertThat(sd.getName()).isEqualTo("SELECT users");
         assertThat(sd.getKind()).isEqualTo(SpanKind.CLIENT);
         assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.system")))
                 .isEqualTo("mysql");
@@ -60,7 +60,7 @@ class ReactiveSqlHelperTest {
         span.end();
 
         assertThat(spanExporter.getFinishedSpanItems().get(0).getName())
-                .isEqualTo("mysql INSERT");
+                .isEqualTo("INSERT orders");
     }
 
     @Test
@@ -81,7 +81,7 @@ class ReactiveSqlHelperTest {
         span.end();
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
-        assertThat(sd.getName()).isEqualTo("mysql SQL");
+        assertThat(sd.getName()).isEqualTo("SQL");
     }
 
     @Test
