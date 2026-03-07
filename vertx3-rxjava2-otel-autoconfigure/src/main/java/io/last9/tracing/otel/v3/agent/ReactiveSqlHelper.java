@@ -41,8 +41,7 @@ public final class ReactiveSqlHelper {
 
         Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
 
-        String operation = extractOperation(sql);
-        String spanName = "mysql " + operation;
+        String spanName = io.last9.tracing.otel.v3.SqlSpanName.fromSql(sql);
 
         return tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
@@ -70,13 +69,4 @@ public final class ReactiveSqlHelper {
         }
     }
 
-    private static String extractOperation(String sql) {
-        if (sql == null) return "SQL";
-        String trimmed = sql.trim();
-        int spaceIdx = trimmed.indexOf(' ');
-        if (spaceIdx > 0) {
-            return trimmed.substring(0, spaceIdx).toUpperCase();
-        }
-        return trimmed.length() > 50 ? trimmed.substring(0, 50) : trimmed;
-    }
 }

@@ -16,6 +16,7 @@ import io.reactivex.Single;
 
 import io.last9.tracing.otel.v3.agent.AgentGuard;
 
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -258,8 +259,19 @@ public final class DbTracing {
         }
     }
 
+    private static final Set<String> SQL_SYSTEMS = Set.of(
+            "mysql", "postgresql", "mariadb", "mssql", "oracle", "sqlite",
+            "db2", "h2", "hsqldb", "other_sql");
+
     private Span startSpan(String operation) {
-        return tracer.spanBuilder(dbSystem + " " + operation)
+        String spanName;
+        if (SQL_SYSTEMS.contains(dbSystem) && SqlSpanName.looksLikeSql(operation)) {
+            spanName = SqlSpanName.fromSql(operation, dbNamespace);
+        } else {
+            // Non-SQL systems or non-SQL operation strings
+            spanName = dbSystem + " " + operation;
+        }
+        return tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
                 .setAttribute(SemanticAttributes.DB_SYSTEM, dbSystem)
                 .setAttribute(SemanticAttributes.DB_STATEMENT, operation)

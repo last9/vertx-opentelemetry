@@ -45,7 +45,7 @@ class JdbcClientHelperTest {
         assertThat(spans).hasSize(1);
 
         SpanData sd = spans.get(0);
-        assertThat(sd.getName()).isEqualTo("jdbc SELECT");
+        assertThat(sd.getName()).isEqualTo("SELECT orders");
         assertThat(sd.getKind()).isEqualTo(SpanKind.CLIENT);
         assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.system")))
                 .isEqualTo("other_sql");
@@ -61,7 +61,7 @@ class JdbcClientHelperTest {
         span.end();
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
-        assertThat(sd.getName()).isEqualTo("jdbc INSERT");
+        assertThat(sd.getName()).isEqualTo("INSERT users");
     }
 
     @Test
@@ -72,7 +72,7 @@ class JdbcClientHelperTest {
         span.end();
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
-        assertThat(sd.getName()).isEqualTo("jdbc UPDATE");
+        assertThat(sd.getName()).isEqualTo("UPDATE orders");
     }
 
     @Test
@@ -83,7 +83,7 @@ class JdbcClientHelperTest {
         span.end();
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
-        assertThat(sd.getName()).isEqualTo("jdbc DELETE");
+        assertThat(sd.getName()).isEqualTo("DELETE sessions");
     }
 
     @Test
@@ -104,7 +104,7 @@ class JdbcClientHelperTest {
         span.end();
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
-        assertThat(sd.getName()).isEqualTo("jdbc SQL");
+        assertThat(sd.getName()).isEqualTo("SQL");
     }
 
     @Test

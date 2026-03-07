@@ -161,6 +161,7 @@ jobs:
           context: .
           file: Dockerfile.java4-agent
           push: true
+          build-args: VERSION=${{ steps.version.outputs.version }}
           tags: |
             ghcr.io/last9/vertx-otel-java4:${{ steps.version.outputs.version }}
             ghcr.io/last9/vertx-otel-java4:latest
@@ -171,6 +172,7 @@ jobs:
           context: .
           file: Dockerfile.java3-agent
           push: true
+          build-args: VERSION=${{ steps.version.outputs.version }}
           tags: |
             ghcr.io/last9/vertx-otel-java3:${{ steps.version.outputs.version }}
             ghcr.io/last9/vertx-otel-java3:latest

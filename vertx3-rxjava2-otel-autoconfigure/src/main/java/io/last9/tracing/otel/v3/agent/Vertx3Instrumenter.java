@@ -97,7 +97,7 @@ public final class Vertx3Instrumenter {
                 .with(listener)
                 .disableClassFormatChanges()
 
-                // Router.router(Vertx) → install tracing handlers on the returned Router
+                // Router.router(Vertx) → install tracing handlers on the returned Router (RxJava2 variant)
                 .type(named("io.vertx.reactivex.ext.web.Router"))
                 .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
                         builder.visit(Advice.to(RouterAdvice.class)
@@ -106,6 +106,16 @@ public final class Vertx3Instrumenter {
                                         .and(takesArguments(1))
                                         .and(takesArgument(0,
                                                 named("io.vertx.reactivex.core.Vertx"))))))
+
+                // Router.router(Vertx) → install tracing handlers on the returned Router (core variant)
+                .type(named("io.vertx.ext.web.Router"))
+                .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                        builder.visit(Advice.to(CoreRouterAdvice.class)
+                                .on(isStatic()
+                                        .and(named("router"))
+                                        .and(takesArguments(1))
+                                        .and(takesArgument(0,
+                                                named("io.vertx.core.Vertx"))))))
 
                 // WebClient.create(Vertx) / create(Vertx, WebClientOptions) → wrap result
                 .type(named("io.vertx.reactivex.ext.web.client.WebClient"))

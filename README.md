@@ -43,6 +43,37 @@ Download `vertx3-otel-agent-<version>.jar` from [Releases](https://github.com/la
 java -javaagent:vertx3-otel-agent-2.1.0.jar -jar app.jar
 ```
 
+<details>
+<summary>EC2 deployment options</summary>
+
+**Option 1: Download from GitHub Release (no S3 needed)**
+
+```bash
+# In EC2 user-data or systemd ExecStartPre:
+curl -L -o /opt/otel/vertx3-otel-agent.jar \
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.1.0/vertx3-otel-agent-2.1.0.jar
+
+java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar app.jar
+```
+
+**Option 2: Bake into AMI**
+
+Add the JAR to your AMI during build (e.g., Packer). No download at boot time — faster startup, no network dependency.
+
+```bash
+# In your Packer provisioner or AMI build script:
+curl -L -o /opt/otel/vertx3-otel-agent.jar \
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.1.0/vertx3-otel-agent-2.1.0.jar
+```
+
+Then in your systemd unit or startup script:
+
+```bash
+java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar app.jar
+```
+
+</details>
+
 **No main class change, no manifest changes, works on JRE.** The agent uses classloader isolation (like the OTel Java agent) — only a tiny 2-class shim goes on the system classloader. All heavy dependencies (ByteBuddy, OTel SDK) are loaded in an isolated classloader from an embedded JAR.
 
 The agent automatically:

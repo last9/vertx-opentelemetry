@@ -45,7 +45,7 @@ class DbTracingTest {
         assertThat(spans).hasSize(1);
 
         SpanData span = spans.get(0);
-        assertThat(span.getName()).isEqualTo("mysql SELECT * FROM orders");
+        assertThat(span.getName()).isEqualTo("SELECT orders_db.orders");
         assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
         assertThat(traceId).isEqualTo(span.getTraceId());
         assertThat(traceId).isNotEqualTo("00000000000000000000000000000000");
@@ -82,7 +82,7 @@ class DbTracingTest {
 
         List<SpanData> spans = spanExporter.getFinishedSpanItems();
         assertThat(spans).hasSize(1);
-        assertThat(spans.get(0).getName()).isEqualTo("mysql DELETE FROM cache");
+        assertThat(spans.get(0).getName()).isEqualTo("DELETE orders_db.cache");
         assertThat(spans.get(0).getKind()).isEqualTo(SpanKind.CLIENT);
     }
 

@@ -8,15 +8,16 @@
 #
 #   initContainers:
 #   - name: vertx-otel-init
-#     image: ghcr.io/last9/vertx-otel-java4:2.0.0
+#     image: ghcr.io/last9/vertx-otel-java4:2.1.0
 #     command: ["cp", "/vertx-otel.jar", "/vertx-otel/vertx-otel.jar"]
 #     volumeMounts:
 #     - name: vertx-otel
 #       mountPath: /vertx-otel
 #
-# Build: docker build -f Dockerfile.java4-agent -t ghcr.io/last9/vertx-otel-java4:2.0.0 .
+# Build: docker build -f Dockerfile.java4-agent --build-arg VERSION=2.1.0 -t ghcr.io/last9/vertx-otel-java4:2.1.0 .
 # (run after: mvn clean package -pl vertx4-rxjava3-otel-autoconfigure -am -DskipTests)
 
 FROM scratch
-COPY vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-2.0.0.jar \
+ARG VERSION
+COPY vertx4-rxjava3-otel-autoconfigure/target/vertx4-rxjava3-otel-autoconfigure-${VERSION}.jar \
      /vertx-otel.jar
