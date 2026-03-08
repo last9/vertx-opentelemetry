@@ -11,6 +11,12 @@ Drop-in OpenTelemetry instrumentation for Vert.x applications. Add the JAR, swap
 
 All features below are **zero-code** — no application changes needed. Just update the agent JAR.
 
+### v2.2.0-beta.3
+
+- **Fix: HTTP `net.peer.name` = "unknown"**: `extractHost()` now null-checks the return value of `getHost()` before falling back to the `host()` method on `HttpClientRequestBase`. Fixes cases where the host is set via `HttpClientOptions.setDefaultHost()` (e.g., Vault, internal services) rather than per-request `setHost()`.
+- **Fix: Reactive SQL missing `db.name`, `net.peer.name`, `net.peer.port`**: Replaced fragile field-walking `extractDbInfo()` with a Datadog-style "capture at creation time" pattern. Connection metadata (host, port, database) is now captured when the pool is created via `ReactiveSqlPoolAdvice` (ByteBuddy constructor advice on `MySQLPoolImpl` / `PgPoolImpl`), cached in a `ConcurrentHashMap`, and looked up at query time.
+- **New: `ReactiveSqlPoolAdvice`**: ByteBuddy advice intercepting reactive SQL pool constructors to capture `SqlConnectOptions` at pool creation time. Supports both MySQL and PostgreSQL pools.
+
 ### v2.2.0-beta.2
 
 - **HTTP client traceparent injection**: Outgoing Vert.x HTTP client requests now carry the `traceparent` header for cross-service W3C trace context propagation. Span lifecycle covers the full round-trip — from `end()` to response/exception.
@@ -41,14 +47,14 @@ The library is published to [Maven Central](https://central.sonatype.com/search?
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>2.2.0-beta.2</version>
+    <version>2.2.0-beta.3</version>
 </dependency>
 
 <!-- OR Vert.x 3 -->
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>2.2.0-beta.2</version>
+    <version>2.2.0-beta.3</version>
 </dependency>
 ```
 
@@ -63,7 +69,7 @@ Choose one of three options (Vert.x 3). Vert.x 4 users: skip to [Step 3](#3-star
 Download `vertx3-otel-agent-<version>.jar` from [Releases](https://github.com/last9/vertx-opentelemetry/releases) and run with `-javaagent`:
 
 ```bash
-java -javaagent:vertx3-otel-agent-2.2.0-beta.2.jar -jar app.jar
+java -javaagent:vertx3-otel-agent-2.2.0-beta.3.jar -jar app.jar
 ```
 
 <details>
@@ -74,7 +80,7 @@ java -javaagent:vertx3-otel-agent-2.2.0-beta.2.jar -jar app.jar
 ```bash
 # In EC2 user-data or systemd ExecStartPre:
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.2/vertx3-otel-agent-2.2.0-beta.2.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.3/vertx3-otel-agent-2.2.0-beta.3.jar
 
 java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar app.jar
 ```
@@ -86,7 +92,7 @@ Add the JAR to your AMI during build (e.g., Packer). No download at boot time �
 ```bash
 # In your Packer provisioner or AMI build script:
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.2/vertx3-otel-agent-2.2.0-beta.2.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.0-beta.3/vertx3-otel-agent-2.2.0-beta.3.jar
 ```
 
 Then in your systemd unit or startup script:
