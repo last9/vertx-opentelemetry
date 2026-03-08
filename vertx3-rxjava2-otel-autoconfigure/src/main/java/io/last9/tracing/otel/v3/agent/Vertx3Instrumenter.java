@@ -334,6 +334,10 @@ public final class Vertx3Instrumenter {
     /**
      * MySQL reactive (SqlClientBase): intercept {@code query(String)} and
      * {@code preparedQuery(String)} on the reactive SQL client implementation.
+     *
+     * <p>Also intercepts pool constructors (MySQLPoolImpl, PgPoolImpl) to capture
+     * connection metadata (host, port, database) at creation time — the Datadog-style
+     * "capture at creation" pattern for reliable db.name and net.peer.name extraction.
      */
     private static void installReactiveSqlInstrumentation(Instrumentation inst,
                                                            AgentBuilder.Listener listener) {
@@ -353,6 +357,36 @@ public final class Vertx3Instrumenter {
         } catch (Throwable t) {
             log.debug("Vertx3Instrumenter: Reactive SQL instrumentation skipped — "
                     + "vertx-sql-client not on classpath: {}", t.getMessage());
+        }
+
+        // Capture connection metadata at pool creation time.
+        // MySQLPoolImpl(ContextInternal, boolean, MySQLConnectOptions, PoolOptions)
+        installReactiveSqlPoolMetadata(inst, listener,
+                "io.vertx.mysqlclient.impl.MySQLPoolImpl", "MySQL");
+        // PgPoolImpl(ContextInternal, boolean, PgConnectOptions, PoolOptions)
+        installReactiveSqlPoolMetadata(inst, listener,
+                "io.vertx.pgclient.impl.PgPoolImpl", "PostgreSQL");
+    }
+
+    private static void installReactiveSqlPoolMetadata(Instrumentation inst,
+                                                        AgentBuilder.Listener listener,
+                                                        String poolClassName,
+                                                        String label) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named(poolClassName))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(ReactiveSqlPoolAdvice.class)
+                                    .on(isConstructor()
+                                            .and(takesArguments(4)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: {} pool metadata capture installed", label);
+        } catch (Throwable t) {
+            log.debug("Vertx3Instrumenter: {} pool metadata capture skipped — "
+                    + "not on classpath: {}", label, t.getMessage());
         }
     }
 

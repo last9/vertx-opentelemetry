@@ -199,15 +199,18 @@ public final class NettyHttpClientHelper {
     }
 
     private static String extractHost(Object request) {
+        // Try getHost() first (Vert.x 3.9+ HttpClientRequestImpl)
+        // Note: getHost() exists but returns null when host was set via
+        // HttpClientOptions.setDefaultHost() rather than per-request setHost().
+        // Fall back to host() on HttpClientRequestBase which always has the value.
         try {
-            // Try getHost() first (Vert.x 3.9+)
-            return (String) request.getClass().getMethod("getHost").invoke(request);
-        } catch (Exception e1) {
-            try {
-                return (String) request.getClass().getMethod("host").invoke(request);
-            } catch (Exception e2) {
-                return null;
-            }
+            String host = (String) request.getClass().getMethod("getHost").invoke(request);
+            if (host != null) return host;
+        } catch (Exception ignored) {}
+        try {
+            return (String) request.getClass().getMethod("host").invoke(request);
+        } catch (Exception ignored) {
+            return null;
         }
     }
 

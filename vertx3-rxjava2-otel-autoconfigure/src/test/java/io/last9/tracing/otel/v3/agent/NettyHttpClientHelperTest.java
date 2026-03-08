@@ -62,6 +62,21 @@ class NettyHttpClientHelperTest {
         public void putHeader(String key, String value) { headers.put(key, value); }
     }
 
+    /**
+     * Stub that mimics Vert.x when host is set via HttpClientOptions (not per-request).
+     * getHost() returns null, but host() (on the base class) returns the actual host.
+     */
+    @SuppressWarnings("unused")
+    static class StubHttpRequestNullGetHost {
+        final Map<String, String> headers = new HashMap<>();
+        public Object method() { return "GET"; }
+        public String getHost() { return null; }
+        public String host() { return "vault.internal"; }
+        public String uri() { return "/v1/secrets/data/myapp"; }
+        public int getPort() { return 8200; }
+        public void putHeader(String key, String value) { headers.put(key, value); }
+    }
+
     /** Stub HTTP request WITHOUT putHeader — tests silent failure of injection. */
     @SuppressWarnings("unused")
     static class StubHttpRequestNoPutHeader {
@@ -175,6 +190,25 @@ class NettyHttpClientHelperTest {
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
 
         assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
+    }
+
+    @Test
+    void startSpanFallsBackToHostMethodWhenGetHostReturnsNull() {
+        StubHttpRequestNullGetHost request = new StubHttpRequestNullGetHost();
+
+        Span span = NettyHttpClientHelper.startSpan(request);
+        assertThat(span).isNotNull();
+
+        NettyHttpClientHelper.exitSend(request, span, span.makeCurrent(), null);
+        NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        // Should use host() fallback, not "unknown"
+        assertThat(sd.getName()).isEqualTo("GET vault.internal");
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("net.peer.name")))
+                .isEqualTo("vault.internal");
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.url")))
+                .isEqualTo("http://vault.internal:8200/v1/secrets/data/myapp");
     }
 
     // --- handleResponse tests ---

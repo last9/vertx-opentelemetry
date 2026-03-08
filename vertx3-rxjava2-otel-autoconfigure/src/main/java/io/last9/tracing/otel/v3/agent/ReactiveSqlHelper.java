@@ -10,9 +10,16 @@ import io.opentelemetry.context.Scope;
 import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * Helper methods called by {@link ReactiveSqlAdvice} to create CLIENT spans
  * for Vert.x 3 reactive SQL operations (MySQLPool, PgPool, etc.).
+ *
+ * <p>Uses the Datadog-style "capture at creation time" pattern: connection metadata
+ * (host, port, database, dbSystem) is captured when the pool is created via
+ * {@link #registerPool(Object, Object)}, and looked up at query time from a
+ * cached map keyed by pool identity. This avoids fragile field-walking at query time.
  *
  * <p>Intercepts at the {@code io.vertx.sqlclient.impl.SqlClientBase} level, covering
  * both {@code query(String)} and {@code preparedQuery(String)} methods. This is the
@@ -25,14 +32,60 @@ public final class ReactiveSqlHelper {
 
     private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
 
+    /**
+     * Cached connection metadata, keyed by {@code System.identityHashCode(pool)}.
+     * Populated at pool creation time by {@link ReactiveSqlPoolAdvice}.
+     */
+    static final ConcurrentHashMap<Integer, DbConnectionInfo> POOL_METADATA = new ConcurrentHashMap<>();
+
     private ReactiveSqlHelper() {}
+
+    /**
+     * Immutable connection metadata captured at pool creation time.
+     */
+    static final class DbConnectionInfo {
+        final String dbSystem;
+        final String dbName;
+        final String host;
+        final int port;
+
+        DbConnectionInfo(String dbSystem, String dbName, String host, int port) {
+            this.dbSystem = dbSystem;
+            this.dbName = dbName;
+            this.host = host;
+            this.port = port;
+        }
+    }
+
+    /**
+     * Called from {@link ReactiveSqlPoolAdvice} when a pool is created.
+     * Extracts host, port, database from the connect options and caches them.
+     *
+     * @param pool           the MySQLPoolImpl or PgPoolImpl instance
+     * @param connectOptions the SqlConnectOptions (MySQLConnectOptions, PgConnectOptions)
+     */
+    public static void registerPool(Object pool, Object connectOptions) {
+        if (pool == null || connectOptions == null) return;
+
+        try {
+            String dbSystem = detectDbSystem(pool);
+            String dbName = invokeStringMethod(connectOptions, "getDatabase");
+            String host = invokeStringMethod(connectOptions, "getHost");
+            int port = invokeIntMethod(connectOptions, "getPort");
+
+            POOL_METADATA.put(System.identityHashCode(pool),
+                    new DbConnectionInfo(dbSystem, dbName, host, port));
+        } catch (Exception ignored) {
+            // Best-effort — don't break pool creation
+        }
+    }
 
     /**
      * Starts a CLIENT span for the given SQL operation.
      * Returns null if already inside a traced call (idempotency guard).
      *
      * @param sql    the SQL statement
-     * @param client the SqlClientBase instance (for extracting db.name and db.system)
+     * @param client the SqlClientBase instance (pool or connection)
      * @return the span, or null if suppressed
      */
     public static Span startSpan(String sql, Object client) {
@@ -42,9 +95,29 @@ public final class ReactiveSqlHelper {
 
         Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
 
-        String[] dbInfo = extractDbInfo(client);
-        String dbSystem = dbInfo[0];
-        String dbName = dbInfo[1];
+        // Look up cached metadata (DD-style: captured at pool creation)
+        DbConnectionInfo info = client != null
+                ? POOL_METADATA.get(System.identityHashCode(client))
+                : null;
+
+        String dbSystem;
+        String dbName;
+        String host;
+        int port;
+
+        if (info != null) {
+            dbSystem = info.dbSystem;
+            dbName = info.dbName;
+            host = info.host;
+            port = info.port;
+        } else {
+            // Fallback: detect from class name (no host/port available)
+            dbSystem = client != null ? detectDbSystem(client) : "mysql";
+            dbName = null;
+            host = null;
+            port = -1;
+        }
+
         String spanName = io.last9.tracing.otel.v3.SqlSpanName.fromSql(sql, dbName);
 
         Span span = tracer.spanBuilder(spanName)
@@ -56,63 +129,14 @@ public final class ReactiveSqlHelper {
         if (dbName != null) {
             span.setAttribute(SemanticAttributes.DB_NAME, dbName);
         }
+        if (host != null) {
+            span.setAttribute(SemanticAttributes.NET_PEER_NAME, host);
+        }
+        if (port > 0) {
+            span.setAttribute(SemanticAttributes.NET_PEER_PORT, (long) port);
+        }
 
         return span;
-    }
-
-    /**
-     * Extracts db.system and db.name from the reactive SQL client via reflection.
-     * Walks up the class hierarchy to find connection options fields.
-     *
-     * @return [dbSystem, dbName] — dbName may be null
-     */
-    private static String[] extractDbInfo(Object client) {
-        String dbSystem = "mysql";
-        String dbName = null;
-
-        if (client == null) return new String[]{dbSystem, dbName};
-
-        try {
-            // Detect db.system from class name
-            String className = client.getClass().getName().toLowerCase();
-            if (className.contains("pg") || className.contains("postgres")) {
-                dbSystem = "postgresql";
-            } else if (className.contains("mysql")) {
-                dbSystem = "mysql";
-            }
-
-            // Try to get the database name from connection options.
-            // SqlClientBase stores connectOptions or similar fields depending on version.
-            // Try reflection to find a getDatabase() method on the options object.
-            for (java.lang.reflect.Field f : getAllFields(client.getClass())) {
-                f.setAccessible(true);
-                Object val = f.get(client);
-                if (val == null) continue;
-
-                // Look for SqlConnectOptions or subclass with getDatabase()
-                try {
-                    java.lang.reflect.Method getDb = val.getClass().getMethod("getDatabase");
-                    String db = (String) getDb.invoke(val);
-                    if (db != null && !db.isEmpty()) {
-                        dbName = db;
-                        break;
-                    }
-                } catch (NoSuchMethodException ignored) {}
-            }
-        } catch (Exception ignored) {}
-
-        return new String[]{dbSystem, dbName};
-    }
-
-    private static java.util.List<java.lang.reflect.Field> getAllFields(Class<?> clazz) {
-        java.util.List<java.lang.reflect.Field> fields = new java.util.ArrayList<>();
-        while (clazz != null && clazz != Object.class) {
-            for (java.lang.reflect.Field f : clazz.getDeclaredFields()) {
-                fields.add(f);
-            }
-            clazz = clazz.getSuperclass();
-        }
-        return fields;
     }
 
     /**
@@ -134,4 +158,28 @@ public final class ReactiveSqlHelper {
         }
     }
 
+    private static String detectDbSystem(Object obj) {
+        String className = obj.getClass().getName().toLowerCase();
+        if (className.contains("pg") || className.contains("postgres")) {
+            return "postgresql";
+        }
+        return "mysql";
+    }
+
+    private static String invokeStringMethod(Object obj, String methodName) {
+        try {
+            return (String) obj.getClass().getMethod(methodName).invoke(obj);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static int invokeIntMethod(Object obj, String methodName) {
+        try {
+            Object result = obj.getClass().getMethod(methodName).invoke(obj);
+            return result instanceof Integer ? (Integer) result : -1;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
 }
