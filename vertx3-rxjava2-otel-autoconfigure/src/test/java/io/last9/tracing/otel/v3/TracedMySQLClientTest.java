@@ -51,7 +51,7 @@ class TracedMySQLClientTest {
         assertThat(spans).hasSize(1);
 
         SpanData span = spans.get(0);
-        assertThat(span.getName()).isEqualTo("mysql SELECT * FROM orders");
+        assertThat(span.getName()).isEqualTo("SELECT test_db.orders");
         assertThat(span.getKind()).isEqualTo(SpanKind.CLIENT);
         assertThat(span.getAttributes().get(AttributeKey.stringKey("db.system")))
                 .isEqualTo("mysql");
@@ -69,7 +69,7 @@ class TracedMySQLClientTest {
 
         List<SpanData> spans = spanExporter.getFinishedSpanItems();
         assertThat(spans).hasSize(1);
-        assertThat(spans.get(0).getName()).isEqualTo("mysql " + sql);
+        assertThat(spans.get(0).getName()).isEqualTo("SELECT test_db.orders");
         assertThat(spans.get(0).getKind()).isEqualTo(SpanKind.CLIENT);
     }
 
@@ -81,7 +81,7 @@ class TracedMySQLClientTest {
 
         List<SpanData> spans = spanExporter.getFinishedSpanItems();
         assertThat(spans).hasSize(1);
-        assertThat(spans.get(0).getName()).isEqualTo("mysql " + sql);
+        assertThat(spans.get(0).getName()).isEqualTo("SELECT test_db.users");
     }
 
     @Test

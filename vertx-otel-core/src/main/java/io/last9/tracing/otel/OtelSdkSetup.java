@@ -15,6 +15,7 @@ import io.opentelemetry.instrumentation.runtimemetrics.java8.MemoryPools;
 import io.opentelemetry.instrumentation.runtimemetrics.java8.Threads;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
+import java.util.Iterator;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -131,11 +132,17 @@ public final class OtelSdkSetup {
             //    META-INF/services and silently break propagation.
             OpenTelemetry openTelemetry = ensurePropagators(sdk);
 
-            // 3. Install OpenTelemetry Logback appender for log export
+            // 3. Auto-install log-trace correlation (MdcTraceTurboFilter + OTel appender)
+            //    if not already configured in logback.xml. This enables zero-config
+            //    log-trace correlation for agent-only deployments.
+            autoInstallLogCorrelation();
+
+            // 4. Set the OTel SDK instance on all OpenTelemetryAppender instances
+            //    (both those from logback.xml and any we just auto-installed).
             OpenTelemetryAppender.install(openTelemetry);
             log.info("Logback OpenTelemetry appender installed for log export");
 
-            // 4. Register JVM runtime metric observers.
+            // 5. Register JVM runtime metric observers.
             //    These are no-ops when OTEL_METRICS_EXPORTER is unset (default "none").
             //    Set OTEL_METRICS_EXPORTER=otlp to export to the configured OTLP endpoint.
             registerJvmMetrics(openTelemetry);
@@ -146,6 +153,76 @@ public final class OtelSdkSetup {
             INSTANCE = openTelemetry;
             INITIALIZED.set(true);
             return INSTANCE;
+        }
+    }
+
+    /**
+     * Auto-installs log-trace correlation components into Logback if not already present.
+     *
+     * <p>This enables zero-config log-trace correlation for agent-only deployments:
+     * <ul>
+     *   <li>{@link MdcTraceTurboFilter} — injects trace_id/span_id into MDC before each log event</li>
+     *   <li>{@link OpenTelemetryAppender} — exports logs via OTLP with trace context</li>
+     * </ul>
+     *
+     * <p>If the user has already configured these in their logback.xml, duplicates are not added.
+     * If Logback is not the SLF4J binding (e.g. Log4j2, JUL), this method silently skips.
+     */
+    private static void autoInstallLogCorrelation() {
+        try {
+            doAutoInstallLogCorrelation();
+        } catch (Throwable t) {
+            // Logback not on classpath, or incompatible version — skip silently
+            log.debug("Auto log-trace correlation skipped: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * Internal method that references Logback classes directly. Isolated so that
+     * {@link NoClassDefFoundError} is caught by the caller if Logback is absent.
+     */
+    private static void doAutoInstallLogCorrelation() {
+        if (!(org.slf4j.LoggerFactory.getILoggerFactory()
+                instanceof ch.qos.logback.classic.LoggerContext)) {
+            log.debug("Non-Logback SLF4J binding — skipping auto log correlation");
+            return;
+        }
+
+        ch.qos.logback.classic.LoggerContext ctx =
+                (ch.qos.logback.classic.LoggerContext) org.slf4j.LoggerFactory.getILoggerFactory();
+
+        // Auto-install MdcTraceTurboFilter if not already present
+        boolean hasMdcFilter = ctx.getTurboFilterList().stream()
+                .anyMatch(f -> f instanceof MdcTraceTurboFilter);
+        if (!hasMdcFilter) {
+            MdcTraceTurboFilter filter = new MdcTraceTurboFilter();
+            filter.setContext(ctx);
+            filter.start();
+            ctx.addTurboFilter(filter);
+            log.info("MdcTraceTurboFilter auto-installed for log-trace correlation");
+        }
+
+        // Auto-install OpenTelemetryAppender on root logger if not already present
+        ch.qos.logback.classic.Logger rootLogger =
+                ctx.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
+        boolean hasOtelAppender = false;
+        Iterator<ch.qos.logback.core.Appender<ch.qos.logback.classic.spi.ILoggingEvent>> iter =
+                rootLogger.iteratorForAppenders();
+        while (iter.hasNext()) {
+            if (iter.next().getClass().getName().contains("OpenTelemetryAppender")) {
+                hasOtelAppender = true;
+                break;
+            }
+        }
+        if (!hasOtelAppender) {
+            OpenTelemetryAppender appender = new OpenTelemetryAppender();
+            appender.setName("OTEL_AUTO");
+            appender.setContext(ctx);
+            appender.setCaptureExperimentalAttributes(true);
+            appender.setCaptureMdcAttributes("*");
+            appender.start();
+            rootLogger.addAppender(appender);
+            log.info("OpenTelemetry log appender auto-installed for OTLP log export");
         }
     }
 

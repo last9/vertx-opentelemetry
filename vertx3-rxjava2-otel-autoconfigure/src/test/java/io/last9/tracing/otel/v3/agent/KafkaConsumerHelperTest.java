@@ -177,4 +177,130 @@ class KafkaConsumerHelperTest {
 
         assertThat(spanExporter.getFinishedSpanItems()).hasSize(3);
     }
+
+    // --- wrapRawHandler tests ---
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void wrapRawHandlerCreatesConsumerSpanForRawRecord() {
+        AtomicReference<String> capturedTraceId = new AtomicReference<>();
+
+        Handler original = record ->
+                capturedTraceId.set(Span.current().getSpanContext().getTraceId());
+
+        Handler wrapped = KafkaConsumerHelper.wrapRawHandler(original);
+
+        ConsumerRecord<String, String> raw = new ConsumerRecord<>("events", 2, 100L, "key-1", "val-1");
+        wrapped.handle(raw);
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+
+        SpanData span = spans.get(0);
+        assertThat(span.getName()).isEqualTo("events process");
+        assertThat(span.getKind()).isEqualTo(SpanKind.CONSUMER);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.system")))
+                .isEqualTo("kafka");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.destination.name")))
+                .isEqualTo("events");
+        assertThat(span.getAttributes().get(AttributeKey.longKey("messaging.kafka.destination.partition")))
+                .isEqualTo(2L);
+        assertThat(span.getAttributes().get(AttributeKey.longKey("messaging.kafka.message.offset")))
+                .isEqualTo(100L);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.kafka.message.key")))
+                .isEqualTo("key-1");
+
+        // Trace ID was current inside the handler
+        assertThat(capturedTraceId.get()).isEqualTo(span.getTraceId());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void wrapRawHandlerLinksToProducerSpanViaTraceparent() {
+        Span producerSpan = otel.getOpenTelemetry().getTracer("test")
+                .spanBuilder("events publish")
+                .setSpanKind(SpanKind.PRODUCER)
+                .startSpan();
+        String producerTraceId = producerSpan.getSpanContext().getTraceId();
+        String producerSpanId = producerSpan.getSpanContext().getSpanId();
+        producerSpan.end();
+
+        String traceparent = "00-" + producerTraceId + "-" + producerSpanId + "-01";
+
+        Handler wrapped = KafkaConsumerHelper.wrapRawHandler(record -> {});
+
+        ConsumerRecord<String, String> raw = new ConsumerRecord<>("events", 0, 0L, "k", "v");
+        raw.headers().add("traceparent", traceparent.getBytes(StandardCharsets.UTF_8));
+        wrapped.handle(raw);
+
+        SpanData consumerSpan = spanExporter.getFinishedSpanItems().stream()
+                .filter(s -> s.getKind() == SpanKind.CONSUMER)
+                .findFirst().orElseThrow();
+
+        // Root span — no parent
+        assertThat(consumerSpan.getParentSpanContext().isValid()).isFalse();
+
+        // Links to producer
+        assertThat(consumerSpan.getLinks()).hasSize(1);
+        assertThat(consumerSpan.getLinks().get(0).getSpanContext().getTraceId())
+                .isEqualTo(producerTraceId);
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void wrapRawHandlerRecordsExceptionAndRethrows() {
+        Handler wrapped = KafkaConsumerHelper.wrapRawHandler(
+                record -> { throw new RuntimeException("raw handler failed"); });
+
+        ConsumerRecord<String, String> raw = new ConsumerRecord<>("events", 0, 0L, "k", "v");
+
+        assertThatThrownBy(() -> wrapped.handle(raw))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("raw handler failed");
+
+        SpanData span = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(span.getEvents()).anyMatch(e -> e.getName().equals("exception"));
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void wrapRawHandlerReturnsNullForNullInput() {
+        Handler result = KafkaConsumerHelper.wrapRawHandler(null);
+        assertThat(result).isNull();
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void wrapRawHandlerPassesThroughNonConsumerRecord() {
+        AtomicBoolean called = new AtomicBoolean(false);
+        Handler wrapped = KafkaConsumerHelper.wrapRawHandler(record -> called.set(true));
+
+        // Pass a non-ConsumerRecord object — should delegate without creating a span
+        wrapped.handle("not-a-consumer-record");
+
+        assertThat(called.get()).isTrue();
+        assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void wrapHandlerDoesNotDoubleWrap() {
+        Handler<KafkaConsumerRecord> original = record -> {};
+        Handler<KafkaConsumerRecord> wrapped1 = KafkaConsumerHelper.wrapHandler(original);
+        // Wrapping the already-wrapped handler should return it as-is (WeakHashMap guard)
+        Handler<KafkaConsumerRecord> wrapped2 = KafkaConsumerHelper.wrapHandler(wrapped1);
+
+        assertThat(wrapped2).isSameAs(wrapped1);
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void wrapRawHandlerDoesNotDoubleWrap() {
+        Handler original = record -> {};
+        Handler wrapped1 = KafkaConsumerHelper.wrapRawHandler(original);
+        Handler wrapped2 = KafkaConsumerHelper.wrapRawHandler(wrapped1);
+
+        assertThat(wrapped2).isSameAs(wrapped1);
+    }
 }

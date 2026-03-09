@@ -32,7 +32,7 @@ import static net.bytebuddy.matcher.ElementMatchers.*;
  *
  * <h2>Raw client library instrumentation</h2>
  * <p>In addition to Vert.x framework methods, this instrumenter intercepts raw client
- * libraries at the protocol level (like Datadog), covering all usage patterns without
+ * libraries at the protocol level, covering all usage patterns without
  * requiring manual code changes:
  * <ul>
  *   <li>Kafka Producer — {@code KafkaProducer.send()}</li>
@@ -41,6 +41,7 @@ import static net.bytebuddy.matcher.ElementMatchers.*;
  *   <li>Redis — {@code RedisConnectionImpl.send()}</li>
  *   <li>JDBC (legacy) — {@code JDBCClientImpl.query/update/...}</li>
  *   <li>MySQL reactive — {@code SqlClientBase.query/preparedQuery}</li>
+ *   <li>RESTEasy (JAX-RS) — {@code SynchronousDispatcher.invoke()} for SERVER spans</li>
  * </ul>
  *
  * <p>This class is discovered by {@link io.last9.tracing.otel.OtelAgent} via reflection.
@@ -97,7 +98,7 @@ public final class Vertx3Instrumenter {
                 .with(listener)
                 .disableClassFormatChanges()
 
-                // Router.router(Vertx) → install tracing handlers on the returned Router
+                // Router.router(Vertx) → install tracing handlers on the returned Router (RxJava2 variant)
                 .type(named("io.vertx.reactivex.ext.web.Router"))
                 .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
                         builder.visit(Advice.to(RouterAdvice.class)
@@ -106,6 +107,16 @@ public final class Vertx3Instrumenter {
                                         .and(takesArguments(1))
                                         .and(takesArgument(0,
                                                 named("io.vertx.reactivex.core.Vertx"))))))
+
+                // Router.router(Vertx) → install tracing handlers on the returned Router (core variant)
+                .type(named("io.vertx.ext.web.Router"))
+                .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                        builder.visit(Advice.to(CoreRouterAdvice.class)
+                                .on(isStatic()
+                                        .and(named("router"))
+                                        .and(takesArguments(1))
+                                        .and(takesArgument(0,
+                                                named("io.vertx.core.Vertx"))))))
 
                 // WebClient.create(Vertx) / create(Vertx, WebClientOptions) → wrap result
                 .type(named("io.vertx.reactivex.ext.web.client.WebClient"))
@@ -131,6 +142,11 @@ public final class Vertx3Instrumenter {
         installRedisInstrumentation(inst, listener);
         installJdbcInstrumentation(inst, listener);
         installReactiveSqlInstrumentation(inst, listener);
+        installResteasyInstrumentation(inst, listener);
+        installRawJdbcInstrumentation(inst, listener);
+        installJedisInstrumentation(inst, listener);
+        installLettuceInstrumentation(inst, listener);
+        installNettyHttpClientInstrumentation(inst, listener);
     }
 
     /**
@@ -207,7 +223,22 @@ public final class Vertx3Instrumenter {
                                             .and(takesArgument(1, named(
                                                     "com.aerospike.client.Key"))))))
                     .installOn(inst);
-            log.info("Vertx3Instrumenter: Aerospike client instrumentation installed");
+            // Batch operations: get(BatchPolicy, Key[]), exists(BatchPolicy, Key[]),
+            // getHeader(BatchPolicy, Key[])
+            // bulkGetBins() delegates to these batch methods.
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("com.aerospike.client.AerospikeClient"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(AerospikeBatchAdvice.class)
+                                    .on(namedOneOf("get", "exists", "getHeader")
+                                            .and(not(takesArguments(0)))
+                                            .and(takesArgument(1, isArray())))))
+                    .installOn(inst);
+
+            log.info("Vertx3Instrumenter: Aerospike client instrumentation installed (single-key + batch)");
         } catch (Throwable t) {
             log.debug("Vertx3Instrumenter: Aerospike instrumentation skipped — "
                     + "aerospike-client not on classpath: {}", t.getMessage());
@@ -269,8 +300,44 @@ public final class Vertx3Instrumenter {
     }
 
     /**
+     * RESTEasy (JAX-RS): intercept {@code SynchronousDispatcher.invoke(HttpRequest, HttpResponse)}
+     * to create SERVER spans for JAX-RS endpoints running on Vert.x.
+     *
+     * <p>This covers applications that use RESTEasy for business routes instead of
+     * the Vert.x Router (e.g., fantasy-tour-v1). The dispatch is synchronous, so
+     * the OTel context is current during the entire resource method execution.
+     */
+    private static void installResteasyInstrumentation(Instrumentation inst,
+                                                        AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("org.jboss.resteasy.core.SynchronousDispatcher"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(ResteasyDispatchAdvice.class)
+                                    .on(named("invoke")
+                                            .and(takesArguments(2))
+                                            .and(takesArgument(0, named(
+                                                    "org.jboss.resteasy.spi.HttpRequest")))
+                                            .and(takesArgument(1, named(
+                                                    "org.jboss.resteasy.spi.HttpResponse"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: RESTEasy dispatcher instrumentation installed");
+        } catch (Throwable t) {
+            log.debug("Vertx3Instrumenter: RESTEasy instrumentation skipped — "
+                    + "resteasy not on classpath: {}", t.getMessage());
+        }
+    }
+
+    /**
      * MySQL reactive (SqlClientBase): intercept {@code query(String)} and
      * {@code preparedQuery(String)} on the reactive SQL client implementation.
+     *
+     * <p>Also intercepts pool constructors (MySQLPoolImpl, PgPoolImpl) to capture
+     * connection metadata (host, port, database) at creation time — a "capture at
+     * creation" pattern for reliable db.name and net.peer.name extraction.
      */
     private static void installReactiveSqlInstrumentation(Instrumentation inst,
                                                            AgentBuilder.Listener listener) {
@@ -290,6 +357,175 @@ public final class Vertx3Instrumenter {
         } catch (Throwable t) {
             log.debug("Vertx3Instrumenter: Reactive SQL instrumentation skipped — "
                     + "vertx-sql-client not on classpath: {}", t.getMessage());
+        }
+
+        // Capture connection metadata at pool creation time.
+        // MySQLPoolImpl(ContextInternal, boolean, MySQLConnectOptions, PoolOptions)
+        installReactiveSqlPoolMetadata(inst, listener,
+                "io.vertx.mysqlclient.impl.MySQLPoolImpl", "MySQL");
+        // PgPoolImpl(ContextInternal, boolean, PgConnectOptions, PoolOptions)
+        installReactiveSqlPoolMetadata(inst, listener,
+                "io.vertx.pgclient.impl.PgPoolImpl", "PostgreSQL");
+    }
+
+    private static void installReactiveSqlPoolMetadata(Instrumentation inst,
+                                                        AgentBuilder.Listener listener,
+                                                        String poolClassName,
+                                                        String label) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named(poolClassName))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(ReactiveSqlPoolAdvice.class)
+                                    .on(isConstructor()
+                                            .and(takesArguments(4)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: {} pool metadata capture installed", label);
+        } catch (Throwable t) {
+            log.debug("Vertx3Instrumenter: {} pool metadata capture skipped — "
+                    + "not on classpath: {}", label, t.getMessage());
+        }
+    }
+
+    /**
+     * Raw JDBC: intercept {@code java.sql.Statement} implementations to create
+     * CLIENT spans for any JDBC usage (MySQL, PostgreSQL, H2, Oracle, etc.).
+     *
+     * <p>This complements the Vert.x JDBCClientImpl instrumentation by also
+     * covering direct Statement usage without the Vert.x wrapper. The AgentGuard
+     * prevents double-instrumentation when both are active.
+     */
+    private static void installRawJdbcInstrumentation(Instrumentation inst,
+                                                       AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(isSubTypeOf(java.sql.Statement.class).and(not(isInterface())))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(JdbcStatementAdvice.class)
+                                    .on(namedOneOf("execute", "executeQuery", "executeUpdate")
+                                            .and(takesArgument(0, String.class)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Raw JDBC Statement instrumentation installed");
+        } catch (Throwable t) {
+            log.debug("Vertx3Instrumenter: Raw JDBC instrumentation skipped: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * Jedis: intercept {@code redis.clients.jedis.Connection.sendCommand()} to create
+     * CLIENT spans for all Jedis Redis operations.
+     *
+     * <p>Covers Jedis, JedisPool, JedisCluster, and Pipeline usage.
+     */
+    private static void installJedisInstrumentation(Instrumentation inst,
+                                                     AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("redis.clients.jedis.Connection"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(JedisAdvice.class)
+                                    .on(named("sendCommand")
+                                            .and(takesArguments(2)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Jedis Redis instrumentation installed");
+        } catch (Throwable t) {
+            log.debug("Vertx3Instrumenter: Jedis instrumentation skipped — "
+                    + "jedis not on classpath: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * Lettuce: intercept {@code io.lettuce.core.AbstractRedisAsyncCommands.dispatch()}
+     * to create CLIENT spans for all Lettuce Redis operations.
+     *
+     * <p>Covers sync, async, reactive, and pipelining usage patterns.
+     */
+    private static void installLettuceInstrumentation(Instrumentation inst,
+                                                       AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.lettuce.core.AbstractRedisAsyncCommands"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(LettuceAdvice.class)
+                                    .on(named("dispatch")
+                                            .and(takesArguments(1)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Lettuce Redis instrumentation installed");
+        } catch (Throwable t) {
+            log.debug("Vertx3Instrumenter: Lettuce instrumentation skipped — "
+                    + "lettuce-core not on classpath: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * Netty HTTP Client: intercept outgoing HTTP requests through Vert.x's core
+     * HTTP client at the {@code HttpClientRequestImpl} level.
+     *
+     * <p>Three intercept points for full round-trip visibility:
+     * <ol>
+     *   <li>{@code HttpClientRequestImpl.end()} — span creation + traceparent injection</li>
+     *   <li>{@code HttpClientRequestBase.handleResponse()} — response status code + span end</li>
+     *   <li>{@code HttpClientRequestBase.handleException()} — error recording + span end</li>
+     * </ol>
+     *
+     * <p>The WebClient advice already covers WebClient.create() wrapping, so the
+     * helper uses a ThreadLocal guard to prevent double-instrumentation.
+     */
+    private static void installNettyHttpClientInstrumentation(Instrumentation inst,
+                                                                AgentBuilder.Listener listener) {
+        try {
+            // 1. Intercept end() on HttpClientRequestImpl — creates span + injects traceparent
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.vertx.core.http.impl.HttpClientRequestImpl"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(NettyHttpClientAdvice.class)
+                                    .on(named("end")
+                                            .and(takesArguments(0)))))
+                    .installOn(inst);
+
+            // 2. Intercept handleResponse() on HttpClientRequestBase — sets status code, ends span
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.vertx.core.http.impl.HttpClientRequestBase"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(NettyHttpResponseAdvice.class)
+                                    .on(named("handleResponse")
+                                            .and(takesArguments(1)))))
+                    .installOn(inst);
+
+            // 3. Intercept handleException() on HttpClientRequestBase — records error, ends span
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.vertx.core.http.impl.HttpClientRequestBase"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(NettyHttpExceptionAdvice.class)
+                                    .on(named("handleException")
+                                            .and(takesArguments(1)))))
+                    .installOn(inst);
+
+            log.info("Vertx3Instrumenter: Netty HTTP client instrumentation installed");
+        } catch (Throwable t) {
+            log.debug("Vertx3Instrumenter: Netty HTTP client instrumentation skipped: {}",
+                    t.getMessage());
         }
     }
 }

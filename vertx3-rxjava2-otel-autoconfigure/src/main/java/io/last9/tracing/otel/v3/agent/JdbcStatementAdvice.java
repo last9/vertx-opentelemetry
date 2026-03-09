@@ -5,27 +5,26 @@ import io.opentelemetry.context.Scope;
 import net.bytebuddy.asm.Advice;
 
 /**
- * ByteBuddy advice for {@code io.vertx.sqlclient.impl.SqlClientBase.query(String)}
- * and {@code io.vertx.sqlclient.impl.SqlClientBase.preparedQuery(String)}.
+ * ByteBuddy advice for raw JDBC {@code java.sql.Statement} implementations.
  *
- * <p>Intercepts the reactive SQL client API (Vert.x 3.8+) at the implementation level.
- * This covers MySQLPool, PgPool, and any other SqlClient implementation that extends
- * SqlClientBase.
+ * <p>Intercepts {@code execute(String)}, {@code executeQuery(String)}, and
+ * {@code executeUpdate(String)} on any Statement implementation (MySQL, PostgreSQL,
+ * H2, etc.) to create CLIENT spans with SQL operation details.
  *
- * <p>The span is started when query()/preparedQuery() is called and ended when the
- * method returns. The actual async execution happens later, but the span captures
- * the SQL statement being issued.
+ * <p>This covers JDBC usage that goes directly through the JDBC driver, bypassing
+ * the Vert.x {@code JDBCClientImpl} wrapper. Uses {@link AgentGuard} to prevent
+ * double-instrumentation when also using Vert.x JDBC or TracedSQLClient.
  */
-public class ReactiveSqlAdvice {
+public class JdbcStatementAdvice {
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     static void onEnter(
-            @Advice.This Object client,
             @Advice.Argument(0) String sql,
+            @Advice.This Object statement,
             @Advice.Local("otelSpan") Span span,
             @Advice.Local("otelScope") Scope scope) {
 
-        span = ReactiveSqlHelper.startSpan(sql, client);
+        span = JdbcStatementHelper.startSpan(sql, statement);
         if (span != null) {
             scope = span.makeCurrent();
         }
@@ -37,6 +36,6 @@ public class ReactiveSqlAdvice {
             @Advice.Local("otelSpan") Span span,
             @Advice.Local("otelScope") Scope scope) {
 
-        ReactiveSqlHelper.endSpan(span, scope, thrown);
+        JdbcStatementHelper.endSpan(span, scope, thrown);
     }
 }
