@@ -32,10 +32,11 @@ import java.util.jar.JarFile;
  *       {@code Instrumentation.appendToSystemClassLoaderSearch()} — all helper classes,
  *       OTel SDK, and ByteBuddy become available to the application</li>
  *   <li>Stores the {@code Instrumentation} handle via {@code OtelAgent.storeInstrumentation()}</li>
+ *   <li>Installs ByteBuddy class transformers for Router, WebClient, Aerospike, Kafka,
+ *       Redis, JDBC, Reactive SQL, and RESTEasy — <b>before</b> OTel SDK init to
+ *       ensure transformers are registered before any application classes are loaded</li>
  *   <li>Initializes the OTel SDK (registers {@code GlobalOpenTelemetry})</li>
  *   <li>Installs RxJava2 context propagation hooks</li>
- *   <li>Installs ByteBuddy class transformers for Router, WebClient, Aerospike, Kafka,
- *       Redis, JDBC, Reactive SQL, and RESTEasy</li>
  * </ol>
  *
  * <h2>Classloader architecture</h2>
@@ -91,11 +92,17 @@ public final class AgentBootstrap {
             // 2. Store instrumentation handle on the app classloader's OtelAgent
             storeInstrumentationOnAppClassLoader(inst);
 
-            // 3. Initialize OTel SDK + RxJava hooks on the app classloader
-            initializeOnAppClassLoader();
-
-            // 4. Install ByteBuddy class transformers (loaded from system classloader)
+            // 3. Install ByteBuddy class transformers FIRST — before OTel SDK init.
+            //    OTel SDK initialization (step 4) triggers class loading of Logback,
+            //    SPI providers, and other libraries. If any of those transitively load
+            //    application classes (e.g. Aerospike, Kafka clients), the transformers
+            //    must already be registered to instrument them. RETRANSFORMATION can
+            //    handle already-loaded classes, but may fail silently for some class
+            //    structures. Installing transformers first avoids the issue entirely.
             installTransformers(inst);
+
+            // 4. Initialize OTel SDK + RxJava hooks on the app classloader
+            initializeOnAppClassLoader();
 
             log("[Last9 OTel Agent] Zero-code instrumentation installed successfully");
         } catch (Exception e) {

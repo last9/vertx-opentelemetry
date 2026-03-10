@@ -82,7 +82,8 @@ public final class Vertx3Instrumenter {
             @Override
             public void onTransformation(TypeDescription typeDescription, ClassLoader classLoader,
                                          JavaModule module, boolean loaded, DynamicType dynamicType) {
-                log.debug("Vertx3Instrumenter: transformed {}", typeDescription.getName());
+                log.info("Vertx3Instrumenter: transformed {} (loaded={})",
+                        typeDescription.getName(), loaded);
             }
 
             @Override
@@ -172,7 +173,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: Kafka producer instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Kafka producer instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: Kafka producer instrumentation skipped — "
                     + "kafka-clients not on classpath: {}", t.getMessage());
         }
     }
@@ -197,7 +198,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: Kafka consumer instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Kafka consumer instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: Kafka consumer instrumentation skipped — "
                     + "vertx-kafka-client not on classpath: {}", t.getMessage());
         }
     }
@@ -240,7 +241,7 @@ public final class Vertx3Instrumenter {
 
             log.info("Vertx3Instrumenter: Aerospike client instrumentation installed (single-key + batch)");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Aerospike instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: Aerospike instrumentation skipped — "
                     + "aerospike-client not on classpath: {}", t.getMessage());
         }
     }
@@ -266,7 +267,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: Redis connection instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Redis instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: Redis instrumentation skipped — "
                     + "vertx-redis-client not on classpath: {}", t.getMessage());
         }
     }
@@ -294,7 +295,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: JDBC client instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: JDBC instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: JDBC instrumentation skipped — "
                     + "vertx-jdbc-client not on classpath: {}", t.getMessage());
         }
     }
@@ -326,7 +327,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: RESTEasy dispatcher instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: RESTEasy instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: RESTEasy instrumentation skipped — "
                     + "resteasy not on classpath: {}", t.getMessage());
         }
     }
@@ -355,7 +356,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: Reactive SQL client instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Reactive SQL instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: Reactive SQL instrumentation skipped — "
                     + "vertx-sql-client not on classpath: {}", t.getMessage());
         }
 
@@ -385,7 +386,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: {} pool metadata capture installed", label);
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: {} pool metadata capture skipped — "
+            log.warn("Vertx3Instrumenter: {} pool metadata capture skipped — "
                     + "not on classpath: {}", label, t.getMessage());
         }
     }
@@ -413,7 +414,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: Raw JDBC Statement instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Raw JDBC instrumentation skipped: {}", t.getMessage());
+            log.warn("Vertx3Instrumenter: Raw JDBC instrumentation skipped: {}", t.getMessage());
         }
     }
 
@@ -438,7 +439,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: Jedis Redis instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Jedis instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: Jedis instrumentation skipped — "
                     + "jedis not on classpath: {}", t.getMessage());
         }
     }
@@ -464,7 +465,7 @@ public final class Vertx3Instrumenter {
                     .installOn(inst);
             log.info("Vertx3Instrumenter: Lettuce Redis instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Lettuce instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: Lettuce instrumentation skipped — "
                     + "lettuce-core not on classpath: {}", t.getMessage());
         }
     }
@@ -524,7 +525,7 @@ public final class Vertx3Instrumenter {
 
             log.info("Vertx3Instrumenter: Netty HTTP client instrumentation installed");
         } catch (Throwable t) {
-            log.debug("Vertx3Instrumenter: Netty HTTP client instrumentation skipped: {}",
+            log.warn("Vertx3Instrumenter: Netty HTTP client instrumentation skipped: {}",
                     t.getMessage());
         }
     }

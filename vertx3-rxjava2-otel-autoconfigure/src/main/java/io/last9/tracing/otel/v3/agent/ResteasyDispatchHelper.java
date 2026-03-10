@@ -291,12 +291,29 @@ public final class ResteasyDispatchHelper {
                                                   String requestPath, String classPath) {
         if (httpMethod == null) return null;
 
+        // Compute remaining path after stripping the class-level @Path prefix.
+        // E.g. requestPath="/api/v1/contests/1/leaderboard", classPath="/api/v1/contests"
+        //   → remainingPath="/1/leaderboard" (2 segments)
+        String remainingPath = "";
+        if (classPath != null && requestPath != null) {
+            String cp = classPath.startsWith("/") ? classPath : "/" + classPath;
+            String rp = requestPath.startsWith("/") ? requestPath : "/" + requestPath;
+            if (rp.startsWith(cp)) {
+                remainingPath = rp.substring(cp.length());
+            }
+        }
+        int targetSegments = countPathSegments(remainingPath);
+
+        // Collect all methods matching the HTTP verb, then pick best by segment count.
+        // getMethods() has no guaranteed order, so we must scan ALL before deciding.
+        String bestPath = null;
+        int bestSegments = -1;
+        boolean hasMatchWithoutPath = false;
+
         for (Method m : resourceClass.getMethods()) {
-            // Check if this method has the matching HTTP method annotation (@GET, @POST, etc.)
             boolean hasHttpMethod = false;
             for (Annotation ann : m.getAnnotations()) {
-                String annName = ann.annotationType().getSimpleName();
-                if (annName.equals(httpMethod)) {
+                if (ann.annotationType().getSimpleName().equals(httpMethod)) {
                     hasHttpMethod = true;
                     break;
                 }
@@ -304,18 +321,50 @@ public final class ResteasyDispatchHelper {
             if (!hasHttpMethod) continue;
 
             // Get method-level @Path
+            String methodPath = null;
             for (Annotation ann : m.getAnnotations()) {
                 if (ann.annotationType().getName().equals("javax.ws.rs.Path") ||
                         ann.annotationType().getName().equals("jakarta.ws.rs.Path")) {
                     try {
-                        return (String) ann.annotationType().getMethod("value").invoke(ann);
+                        methodPath = (String) ann.annotationType().getMethod("value").invoke(ann);
                     } catch (Exception ignored) {}
+                    break;
                 }
             }
 
-            // Method matches HTTP verb but has no @Path — it handles the class-level path
+            if (methodPath == null) {
+                hasMatchWithoutPath = true;
+                continue;
+            }
+
+            int methodSegments = countPathSegments(methodPath);
+            if (methodSegments == targetSegments) {
+                return methodPath; // exact segment-count match
+            }
+            // Keep closest candidate (prefer more segments over fewer)
+            if (bestPath == null || Math.abs(methodSegments - targetSegments) < Math.abs(bestSegments - targetSegments)) {
+                bestPath = methodPath;
+                bestSegments = methodSegments;
+            }
+        }
+
+        // No remaining path and a method without @Path exists → class-level handler
+        if (targetSegments == 0 && hasMatchWithoutPath) {
             return null;
         }
-        return null;
+
+        return bestPath;
+    }
+
+    /**
+     * Counts non-empty path segments. E.g. "/1/leaderboard" → 2, "/{id}" → 1, "/" → 0.
+     */
+    private static int countPathSegments(String path) {
+        if (path == null || path.isEmpty() || path.equals("/")) return 0;
+        String trimmed = path;
+        if (trimmed.startsWith("/")) trimmed = trimmed.substring(1);
+        if (trimmed.endsWith("/")) trimmed = trimmed.substring(0, trimmed.length() - 1);
+        if (trimmed.isEmpty()) return 0;
+        return trimmed.split("/").length;
     }
 }
