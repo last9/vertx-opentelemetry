@@ -2,8 +2,6 @@ package io.last9.tracing.otel;
 
 import java.lang.instrument.Instrumentation;
 import java.util.concurrent.atomic.AtomicReference;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Java agent entry point for zero-touch OpenTelemetry initialization.
@@ -45,8 +43,6 @@ import org.slf4j.LoggerFactory;
  * @see OtelSdkSetup
  */
 public final class OtelAgent {
-
-    private static final Logger log = LoggerFactory.getLogger(OtelAgent.class);
 
     /** FQCN of the Vert.x 3 bytecode instrumenter (present only in the v3 fat JAR). */
     private static final String VERTX3_INSTRUMENTER =
@@ -92,7 +88,7 @@ public final class OtelAgent {
      */
     public static void premain(String agentArgs, Instrumentation inst) {
         INSTRUMENTATION.set(inst);
-        log.info("OtelAgent: initializing OpenTelemetry before application startup");
+        log("[Last9 OTel Agent] Initializing OpenTelemetry before application startup");
         initialize(inst);
     }
 
@@ -104,7 +100,7 @@ public final class OtelAgent {
      */
     public static void agentmain(String agentArgs, Instrumentation inst) {
         INSTRUMENTATION.set(inst);
-        log.info("OtelAgent: attached dynamically — initializing OpenTelemetry");
+        log("[Last9 OTel Agent] Attached dynamically — initializing OpenTelemetry");
         initialize(inst);
     }
 
@@ -112,8 +108,9 @@ public final class OtelAgent {
         try {
             OtelSdkSetup.initialize();
         } catch (Exception e) {
-            log.error("OtelAgent: OpenTelemetry initialization failed — "
-                    + "application will start WITHOUT tracing: {}", e.getMessage(), e);
+            log("[Last9 OTel Agent] OpenTelemetry initialization failed — "
+                    + "application will start WITHOUT tracing: " + e.getMessage());
+            e.printStackTrace(System.err);
         }
 
         // Vert.x 3: install bytecode instrumentation for Router, WebClient, Kafka, etc.
@@ -122,11 +119,15 @@ public final class OtelAgent {
             Class<?> instrumenter = Class.forName(VERTX3_INSTRUMENTER);
             instrumenter.getMethod("install", Instrumentation.class).invoke(null, inst);
         } catch (ClassNotFoundException e) {
-            log.debug("OtelAgent: Vertx3Instrumenter not on classpath — "
-                    + "skipping Vert.x 3 bytecode instrumentation");
+            // Vertx3Instrumenter not on classpath — skip Vert.x 3 bytecode instrumentation
         } catch (Exception e) {
-            log.warn("OtelAgent: failed to install Vert.x 3 bytecode instrumentation: {}",
-                    e.getMessage(), e);
+            log("[Last9 OTel Agent] Failed to install Vert.x 3 bytecode instrumentation: "
+                    + e.getMessage());
+            e.printStackTrace(System.err);
         }
+    }
+
+    private static void log(String message) {
+        System.err.println(message);
     }
 }

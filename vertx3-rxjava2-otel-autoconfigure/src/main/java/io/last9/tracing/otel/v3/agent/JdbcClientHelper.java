@@ -31,23 +31,71 @@ public final class JdbcClientHelper {
      * Starts a CLIENT span for the given SQL operation.
      * Returns null if already inside a traced call (idempotency guard).
      *
-     * @param sql the SQL statement
+     * @param sql    the SQL statement
+     * @param client the JDBCClientImpl instance (for extracting db.name)
      * @return the span, or null if suppressed
      */
-    public static Span startSpan(String sql) {
+    public static Span startSpan(String sql, Object client) {
         if (AgentGuard.IN_DB_TRACED_CALL.get()) {
             return null;
         }
 
         Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
 
-        String spanName = io.last9.tracing.otel.v3.SqlSpanName.fromSql(sql);
+        String dbName = extractDbName(client);
+        String spanName = io.last9.tracing.otel.v3.SqlSpanName.fromSql(sql, dbName);
 
-        return tracer.spanBuilder(spanName)
+        Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
                 .setAttribute(SemanticAttributes.DB_SYSTEM, "other_sql")
                 .setAttribute(SemanticAttributes.DB_STATEMENT, sql)
                 .startSpan();
+
+        if (dbName != null) {
+            span.setAttribute(SemanticAttributes.DB_NAME, dbName);
+        }
+
+        return span;
+    }
+
+    /**
+     * Extracts the database name from a JDBCClientImpl's config.
+     * Uses reflection to access the 'config' field and parse the JDBC URL.
+     */
+    private static String extractDbName(Object client) {
+        if (client == null) return null;
+        try {
+            java.lang.reflect.Field configField = client.getClass().getDeclaredField("config");
+            configField.setAccessible(true);
+            Object config = configField.get(client);
+            if (config == null) return null;
+
+            String url = (String) config.getClass().getMethod("getString", String.class)
+                    .invoke(config, "url");
+            return parseDbNameFromJdbcUrl(url);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Parses the database name from a JDBC URL.
+     * Examples: jdbc:postgresql://host:5432/mydb → mydb
+     *           jdbc:mysql://host:3306/testdb?param=val → testdb
+     */
+    static String parseDbNameFromJdbcUrl(String url) {
+        if (url == null) return null;
+        try {
+            // Strip "jdbc:" prefix, then parse as URI
+            String withoutJdbc = url.startsWith("jdbc:") ? url.substring(5) : url;
+            java.net.URI uri = new java.net.URI(withoutJdbc);
+            String path = uri.getPath();
+            if (path != null && path.length() > 1) {
+                // Remove leading '/'
+                return path.substring(1).split("[?;]")[0];
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     /**
