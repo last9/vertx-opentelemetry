@@ -50,6 +50,7 @@ public final class KafkaProducerHelper {
                 .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, record.topic())
                 .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
                         SemanticAttributes.MessagingOperationValues.PUBLISH)
+                .setAttribute("peer.service", "kafka")
                 .startSpan();
 
         if (record.key() != null) {

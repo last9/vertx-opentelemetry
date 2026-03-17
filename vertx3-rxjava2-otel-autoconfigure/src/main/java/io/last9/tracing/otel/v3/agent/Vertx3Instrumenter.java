@@ -42,6 +42,7 @@ import static net.bytebuddy.matcher.ElementMatchers.*;
  *   <li>JDBC (legacy) — {@code JDBCClientImpl.query/update/...}</li>
  *   <li>MySQL reactive — {@code SqlClientBase.query/preparedQuery}</li>
  *   <li>RESTEasy (JAX-RS) — {@code SynchronousDispatcher.invoke()} for SERVER spans</li>
+ *   <li>AWS SQS — {@code AmazonSQSClient/DefaultSqsClient.receiveMessage()} for CONSUMER spans</li>
  * </ul>
  *
  * <p>This class is discovered by {@link io.last9.tracing.otel.OtelAgent} via reflection.
@@ -148,6 +149,7 @@ public final class Vertx3Instrumenter {
         installJedisInstrumentation(inst, listener);
         installLettuceInstrumentation(inst, listener);
         installNettyHttpClientInstrumentation(inst, listener);
+        installSqsInstrumentation(inst, listener);
     }
 
     /**
@@ -527,6 +529,54 @@ public final class Vertx3Instrumenter {
         } catch (Throwable t) {
             log.warn("Vertx3Instrumenter: Netty HTTP client instrumentation skipped: {}",
                     t.getMessage());
+        }
+    }
+
+    /**
+     * AWS SQS: intercept {@code receiveMessage(ReceiveMessageRequest)} on both
+     * SDK v1 ({@code AmazonSQSClient}) and SDK v2 ({@code DefaultSqsClient})
+     * to create CONSUMER spans for SQS message receive operations.
+     */
+    private static void installSqsInstrumentation(Instrumentation inst,
+                                                    AgentBuilder.Listener listener) {
+        // SDK v1: com.amazonaws.services.sqs.AmazonSQSClient
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("com.amazonaws.services.sqs.AmazonSQSClient"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(SqsReceiveAdvice.class)
+                                    .on(named("receiveMessage")
+                                            .and(takesArguments(1))
+                                            .and(takesArgument(0, named(
+                                                    "com.amazonaws.services.sqs.model.ReceiveMessageRequest"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: AWS SQS SDK v1 instrumentation installed");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: AWS SQS SDK v1 instrumentation skipped — "
+                    + "aws-java-sdk-sqs not on classpath: {}", t.getMessage());
+        }
+
+        // SDK v2: software.amazon.awssdk.services.sqs.DefaultSqsClient
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("software.amazon.awssdk.services.sqs.DefaultSqsClient"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(SqsReceiveAdvice.class)
+                                    .on(named("receiveMessage")
+                                            .and(takesArguments(1))
+                                            .and(takesArgument(0, named(
+                                                    "software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: AWS SQS SDK v2 instrumentation installed");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: AWS SQS SDK v2 instrumentation skipped — "
+                    + "sqs SDK v2 not on classpath: {}", t.getMessage());
         }
     }
 }
