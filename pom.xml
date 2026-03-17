@@ -6,7 +6,7 @@
 
     <groupId>io.last9</groupId>
     <artifactId>vertx-otel-autoconfigure</artifactId>
-    <version>2.2.1</version>
+    <version>2.2.2-beta.1</version>
     <packaging>pom</packaging>
 
     <name>Vert.x OpenTelemetry Auto-Configure</name>
@@ -353,7 +353,13 @@
                                              app's classpath, so the app's SLF4J takes precedence
                                              when both are present. -->
                                         <include>org.slf4j:slf4j-api</include>
-                                        <include>org.slf4j:slf4j-nop</include>
+                                        <!-- slf4j-nop intentionally NOT included here.
+                                             When this library is used as a compile dependency,
+                                             bundling slf4j-nop overrides the app's logback binding
+                                             and suppresses all application logging. The standalone
+                                             agent doesn't need it either — AgentBootstrap uses
+                                             System.err for premain logging, and after JAR injection
+                                             the app's SLF4J binding is on the classpath. -->
                                         <!-- Vert.x Micrometer integration + Micrometer core.
                                              Bundled so users get internal Vert.x metrics without
                                              adding any extra dependencies.
