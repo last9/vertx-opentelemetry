@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-        <version>2.2.1</version>
+        <version>2.2.2-beta.3</version>
     </parent>
 
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
@@ -146,15 +146,16 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- SLF4J no-op binding: bundled into the shaded JAR so the standalone
-             agent (vertx3-otel-agent) can load classes that use SLF4J before the
-             application classpath is available. When the app provides its own SLF4J
-             binding (e.g. logback), it takes precedence because the agent's JAR is
-             appended after the app classpath on the system classloader. -->
+        <!-- SLF4J no-op binding: NOT bundled here. Only the standalone agent
+             (vertx3-otel-agent) needs this for premain-time logging before the
+             app classpath is available. When this library is used as a compile
+             dependency, bundling slf4j-nop would override the app's logback
+             binding and suppress all application logging. -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-nop</artifactId>
             <version>${slf4j.version}</version>
+            <scope>test</scope>
         </dependency>
 
         <!-- ==================== Test Dependencies ==================== -->

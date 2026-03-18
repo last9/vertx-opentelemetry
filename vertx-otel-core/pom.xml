@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-        <version>2.2.1</version>
+        <version>2.2.2-beta.3</version>
     </parent>
 
     <artifactId>vertx-otel-core</artifactId>
@@ -87,42 +87,13 @@
             <version>${opentelemetry-instrumentation.version}-alpha</version>
         </dependency>
 
-        <!-- AWS resource detectors: EC2, ECS, EKS, Lambda, Elastic Beanstalk.
-             Registered via SPI — autoconfigure picks them up automatically.
-             Makes short HTTP calls to IMDS at startup; silently skips if not on AWS. -->
-        <dependency>
-            <groupId>io.opentelemetry.contrib</groupId>
-            <artifactId>opentelemetry-aws-resources</artifactId>
-            <version>${opentelemetry-contrib.version}</version>
-        </dependency>
-
-        <!-- Kotlin stdlib: okhttp 4.x is written in Kotlin, kotlin-stdlib is required at runtime.
-             Bundled here so customers don't need to add it separately. -->
-        <dependency>
-            <groupId>org.jetbrains.kotlin</groupId>
-            <artifactId>kotlin-stdlib</artifactId>
-            <version>1.9.22</version>
-        </dependency>
-
-        <!-- OkHttp: required by opentelemetry-aws-resources (Ec2Resource calls EC2 IMDS via
-             OkHttpClient). This is bundled into the fat JAR so the AWS detector works on EC2
-             without requiring customers to add okhttp as a dependency.
-             NOTE: opentelemetry-exporter-sender-okhttp is excluded from the shade; only the
-             okhttp library itself (not its OTel sender SPI) is bundled here. -->
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>4.12.0</version>
-        </dependency>
-
-        <!-- GCP resource detectors: GCE, GKE, Cloud Run, App Engine.
-             Registered via SPI — autoconfigure picks them up automatically.
-             Makes short HTTP calls to GCP metadata server at startup; silently skips if not on GCP. -->
-        <dependency>
-            <groupId>io.opentelemetry.contrib</groupId>
-            <artifactId>opentelemetry-gcp-resources</artifactId>
-            <version>${opentelemetry-contrib.version}</version>
-        </dependency>
+        <!-- Cloud resource detectors (AWS EC2/ECS/EKS, GCP GCE/GKE) REMOVED.
+             Their IMDS/metadata HTTP calls during SDK init use OkHttp, whose orphaned
+             thread pools interfere with the JDK HttpClient used by the OTLP trace
+             exporter — causing traces to silently fail while metrics continue working.
+             Cloud attributes should be added by the OTel Collector's resourcedetection
+             processor instead (resourcedetection/ec2, resourcedetection/gcp).
+             See: https://github.com/open-telemetry/opentelemetry-java-contrib/issues/1351 -->
 
         <!-- Logging -->
         <dependency>

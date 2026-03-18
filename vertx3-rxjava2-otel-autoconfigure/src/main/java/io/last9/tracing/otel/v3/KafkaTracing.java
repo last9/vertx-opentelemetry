@@ -186,7 +186,8 @@ public final class KafkaTracing {
                     .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
                             SemanticAttributes.MessagingOperationValues.PROCESS)
                     .setAttribute(SemanticAttributes.MESSAGING_BATCH_MESSAGE_COUNT,
-                            (long) records.size());
+                            (long) records.size())
+                    .setAttribute("peer.service", "kafka");
 
             if (consumerGroup != null) {
                 spanBuilder.setAttribute(SemanticAttributes.MESSAGING_KAFKA_CONSUMER_GROUP,
@@ -331,6 +332,7 @@ public final class KafkaTracing {
                     .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, topic)
                     .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
                             SemanticAttributes.MessagingOperationValues.PROCESS)
+                    .setAttribute("peer.service", "kafka")
                     .startSpan();
             try (Scope ignored = span.makeCurrent()) {
                 span.recordException(err,
@@ -410,6 +412,7 @@ public final class KafkaTracing {
                 .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, record.topic())
                 .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
                         SemanticAttributes.MessagingOperationValues.PUBLISH)
+                .setAttribute("peer.service", "kafka")
                 .startSpan();
 
         if (record.key() != null) {

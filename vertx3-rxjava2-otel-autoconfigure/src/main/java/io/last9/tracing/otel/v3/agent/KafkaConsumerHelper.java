@@ -131,7 +131,8 @@ public final class KafkaConsumerHelper {
                     .setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
                             (long) cr.partition())
                     .setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_OFFSET,
-                            cr.offset());
+                            cr.offset())
+                    .setAttribute("peer.service", "kafka");
 
             if (cr.key() != null) {
                 spanBuilder.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_KEY,
@@ -189,7 +190,8 @@ public final class KafkaConsumerHelper {
                     .setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
                             (long) record.partition())
                     .setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_OFFSET,
-                            record.offset());
+                            record.offset())
+                    .setAttribute("peer.service", "kafka");
 
             if (record.key() != null) {
                 spanBuilder.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_KEY,
