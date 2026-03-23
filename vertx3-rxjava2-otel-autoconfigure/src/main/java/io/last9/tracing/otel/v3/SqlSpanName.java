@@ -1,5 +1,8 @@
 package io.last9.tracing.otel.v3;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -23,14 +26,17 @@ public final class SqlSpanName {
 
     private SqlSpanName() {}
 
-    private static final Set<String> SQL_KEYWORDS = Set.of(
-            "SELECT", "INSERT", "UPDATE", "DELETE", "REPLACE",
-            "CREATE", "DROP", "ALTER", "TRUNCATE",
-            "SHOW", "SET", "COMMIT", "ROLLBACK", "BEGIN",
-            "CALL", "EXECUTE", "EXPLAIN", "DESCRIBE", "USE", "GRANT", "REVOKE");
+    private static final Set<String> SQL_KEYWORDS = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList(
+                    "SELECT", "INSERT", "UPDATE", "DELETE", "REPLACE",
+                    "CREATE", "DROP", "ALTER", "TRUNCATE",
+                    "SHOW", "SET", "COMMIT", "ROLLBACK", "BEGIN",
+                    "CALL", "EXECUTE", "EXPLAIN", "DESCRIBE", "USE", "GRANT", "REVOKE")));
 
-    private static final Set<String> FROM_OPS = Set.of("SELECT", "DELETE");
-    private static final Set<String> INTO_OPS = Set.of("INSERT", "REPLACE");
+    private static final Set<String> FROM_OPS = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList("SELECT", "DELETE")));
+    private static final Set<String> INTO_OPS = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList("INSERT", "REPLACE")));
     // Matches a SQL identifier: unquoted word, or backtick/double-quote quoted
     private static final Pattern TABLE_PATTERN = Pattern.compile(
             "(`[^`]+`|\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_.]*)"
@@ -40,7 +46,7 @@ public final class SqlSpanName {
      * Returns true if the string starts with a known SQL keyword.
      */
     public static boolean looksLikeSql(String s) {
-        if (s == null || s.isBlank()) return false;
+        if (s == null || s.trim().isEmpty()) return false;
         String[] tokens = tokenize(s);
         return tokens.length > 0 && SQL_KEYWORDS.contains(tokens[0].toUpperCase(Locale.ROOT));
     }
@@ -63,7 +69,7 @@ public final class SqlSpanName {
      * @return span name like {@code SELECT cep_core.users} or {@code SHOW}
      */
     public static String fromSql(String sql, String dbName) {
-        if (sql == null || sql.isBlank()) {
+        if (sql == null || sql.trim().isEmpty()) {
             return "SQL";
         }
 

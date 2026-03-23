@@ -44,7 +44,7 @@ public final class CoreTracedRouter {
     static final Set<Router> INSTRUMENTED = Collections.synchronizedSet(
             Collections.newSetFromMap(new WeakHashMap<>()));
 
-    private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<>() {
+    private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<HttpServerRequest>() {
         @Override
         public Iterable<String> keys(HttpServerRequest carrier) {
             return carrier.headers().names();

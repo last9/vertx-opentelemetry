@@ -4,6 +4,7 @@ import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
@@ -121,7 +122,7 @@ public final class KafkaConsumerHelper {
 
             String topic = cr.topic() != null ? cr.topic() : "unknown";
 
-            var spanBuilder = tracer.spanBuilder(topic + " process")
+            SpanBuilder spanBuilder = tracer.spanBuilder(topic + " process")
                     .setParent(Context.root())
                     .setSpanKind(SpanKind.CONSUMER)
                     .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
@@ -180,7 +181,7 @@ public final class KafkaConsumerHelper {
 
             String topic = record.topic() != null ? record.topic() : "unknown";
 
-            var spanBuilder = tracer.spanBuilder(topic + " process")
+            SpanBuilder spanBuilder = tracer.spanBuilder(topic + " process")
                     .setParent(Context.root())
                     .setSpanKind(SpanKind.CONSUMER)
                     .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")

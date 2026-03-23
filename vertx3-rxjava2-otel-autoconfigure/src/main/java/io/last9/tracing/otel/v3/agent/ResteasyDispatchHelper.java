@@ -49,7 +49,7 @@ public final class ResteasyDispatchHelper {
      * {@code getHttpHeaders().getHeaderString(name)} and
      * {@code getHttpHeaders().getRequestHeaders()}.
      */
-    private static final TextMapGetter<Object> HEADER_GETTER = new TextMapGetter<>() {
+    private static final TextMapGetter<Object> HEADER_GETTER = new TextMapGetter<Object>() {
         @Override
         public Iterable<String> keys(Object carrier) {
             try {

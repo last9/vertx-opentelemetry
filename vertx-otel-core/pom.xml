@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-        <version>2.2.2-beta.6</version>
+        <version>2.2.2-beta.7</version>
     </parent>
 
     <artifactId>vertx-otel-core</artifactId>
@@ -41,14 +41,14 @@
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
 
-        <!-- JDK HTTP sender (replaces the default okhttp sender).
-             opentelemetry-exporter-otlp pulls in opentelemetry-exporter-sender-okhttp by
-             default, which requires okhttp3 on the classpath at runtime. Since we bundle
-             OTel classes but not okhttp3 itself, that causes NoClassDefFoundError: okhttp3/Interceptor.
-             The JDK sender uses Java 11's built-in HttpClient — no external dependency needed. -->
+        <!-- OkHttp HTTP sender for OTLP export.
+             Replaces sender-jdk (which requires Java 11's HttpClient) so the agent
+             works on Java 8. OkHttp 4.x targets Java 8 bytecode.
+             Shaded as io.last9.internal.okhttp3 to avoid conflicts with customer
+             fat JARs that bundle their own OkHttp (e.g. Retrofit). -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-exporter-sender-jdk</artifactId>
+            <artifactId>opentelemetry-exporter-sender-okhttp</artifactId>
         </dependency>
 
         <!-- OpenTelemetry Semantic Conventions -->
@@ -129,9 +129,14 @@
 
     <build>
         <plugins>
+            <!-- Compile to Java 8 so the agent works on Java 8 JVMs.
+                 OkHttp sender (replacing sender-jdk) satisfies the only Java 11 dependency. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>8</release>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-        <version>2.2.2-beta.6</version>
+        <version>2.2.2-beta.7</version>
     </parent>
 
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
@@ -194,9 +194,20 @@
 
     <build>
         <plugins>
+            <!-- Main sources compile to Java 8 so the agent works on Java 8 JVMs.
+                 Test sources use the parent default (source/target 11) which does not
+                 restrict JDK API usage — tests run on Java 17 in CI. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-compile</id>
+                        <configuration>
+                            <release>8</release>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
