@@ -6,8 +6,10 @@ import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.client.WebClient;
+import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.junit5.VertxExtension;
 import io.vertx.junit5.VertxTestContext;
 import org.junit.jupiter.api.*;
@@ -53,8 +55,9 @@ class CoreTracedRouterTest {
         router.get("/api/users/:id").handler(ctx ->
                 ctx.response().end("user-" + ctx.pathParam("id")));
 
-        router.post("/api/data").handler(ctx ->
-                ctx.response().end("got: " + ctx.getBody()));
+        router.post("/api/data")
+                .handler(BodyHandler.create())
+                .handler(ctx -> ctx.response().end("got: " + ctx.getBody()));
 
         vertx.createHttpServer()
                 .requestHandler(router)
@@ -226,6 +229,58 @@ class CoreTracedRouterTest {
                                 .get(SemanticAttributes.HTTP_REQUEST_METHOD)).isEqualTo("POST");
                     });
                     testContext.completeNow();
+                });
+    }
+
+    /**
+     * Reproduces the "Empty reply from server" bug when BodyHandler is used.
+     *
+     * Pattern: BodyHandler + async RxJava Single response (common in custom wrappers).
+     * Before the fix, our tracing handler used request.bodyHandler() which conflicted
+     * with BodyHandler — ctx.next() was never called, causing the request to hang.
+     */
+    @Test
+    void bodyHandlerWithAsyncRxResponseDoesNotHang(VertxTestContext testContext) {
+        // Mimics common AbstractRoute pattern: BodyHandler + RxJava async response
+        Router router = CoreTracedRouter.create(vertx, otel.getOpenTelemetry());
+
+        router.post("/api/async-handler")
+                .handler(BodyHandler.create())
+                .handler(ctx -> {
+                    // Simulate AbstractRoute: validate, then handle async via Single
+                    io.reactivex.Single.just(ctx.getBodyAsJson())
+                            .map(body -> body != null ? body.getString("msg", "null") : "null")
+                            .subscribe(
+                                    msg -> ctx.response()
+                                            .putHeader("content-type", "application/json")
+                                            .end("{\"result\":\"" + msg + "\"}"),
+                                    err -> ctx.response()
+                                            .setStatusCode(500)
+                                            .end(err.getMessage())
+                            );
+                });
+
+        vertx.createHttpServer()
+                .requestHandler(router)
+                .listen(0, listenAr -> {
+                    int testPort = listenAr.result().actualPort();
+                    webClient.post(testPort, "localhost", "/api/async-handler")
+                            .putHeader("content-type", "application/json")
+                            .sendBuffer(Buffer.buffer("{\"msg\":\"hello\"}"), ar -> {
+                                testContext.verify(() -> {
+                                    assertThat(ar.succeeded()).isTrue();
+                                    assertThat(ar.result().statusCode()).isEqualTo(200);
+                                    assertThat(ar.result().bodyAsString())
+                                            .isEqualTo("{\"result\":\"hello\"}");
+
+                                    waitForSpans(1);
+                                    List<SpanData> serverSpans = getServerSpans();
+                                    assertThat(serverSpans).hasSize(1);
+                                    assertThat(serverSpans.get(0).getAttributes()
+                                            .get(SemanticAttributes.HTTP_REQUEST_METHOD)).isEqualTo("POST");
+                                });
+                                testContext.completeNow();
+                            });
                 });
     }
 

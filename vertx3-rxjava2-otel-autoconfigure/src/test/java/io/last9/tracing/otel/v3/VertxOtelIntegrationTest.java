@@ -83,17 +83,21 @@ class VertxOtelIntegrationTest {
 
         router.get("/api/error").handler(ctx -> ctx.response().setStatusCode(500).end("error"));
 
-        // POST handler: verifies body is readable AND span is current (Bug 1 regression test).
-        // TracedRouter buffers the body before calling ctx.next(), so ctx.getBodyAsJson() must
-        // work here without a separate BodyHandler.
-        router.post("/api/echo").handler(ctx -> {
-            String traceId = Span.current().getSpanContext().getTraceId();
-            JsonObject body = ctx.getBodyAsJson();
-            String msg = body != null ? body.getString("msg", "null") : "null";
-            ctx.response()
-                    .putHeader("content-type", "application/json")
-                    .end(new JsonObject().put("msg", msg).put("traceId", traceId).encode());
-        });
+        // POST handler: verifies body is readable via BodyHandler and span is on the context.
+        // TracedRouter no longer buffers the body itself to avoid conflicts with apps that
+        // register their own BodyHandler (which caused "Empty reply from server").
+        router.post("/api/echo")
+                .handler(io.vertx.reactivex.ext.web.handler.BodyHandler.create())
+                .handler(ctx -> {
+                    // Span is stored on the RoutingContext, not in ThreadLocal scope
+                    Span span = ctx.get("otel.span");
+                    String traceId = span != null ? span.getSpanContext().getTraceId() : "no-span";
+                    JsonObject body = ctx.getBodyAsJson();
+                    String msg = body != null ? body.getString("msg", "null") : "null";
+                    ctx.response()
+                            .putHeader("content-type", "application/json")
+                            .end(new JsonObject().put("msg", msg).put("traceId", traceId).encode());
+                });
 
         // Downstream receiver: echoes back the traceparent header it received.
         router.get("/api/downstream").handler(ctx -> {
@@ -263,11 +267,10 @@ class VertxOtelIntegrationTest {
     }
 
     @Test
-    void postHandlerBodyReadableAndSpanCurrent(VertxTestContext testContext) throws Exception {
-        // Regression test for Bug 1: span scope was closed before user handlers ran because
-        // BodyHandler is async in Vert.x 3. After the fix, TracedRouter buffers the body via
-        // request.bodyHandler() so ctx.next() is only called after body arrival — with the
-        // span still active in the OTel ThreadLocal.
+    void postHandlerBodyReadableAndSpanOnContext(VertxTestContext testContext) throws Exception {
+        // Verifies that POST body is readable via BodyHandler and the span is accessible
+        // on the RoutingContext. TracedRouter no longer buffers the body itself — apps
+        // must use BodyHandler. The span is stored on ctx as "otel.span".
         JsonObject requestBody = new JsonObject().put("msg", "hello");
 
         webClient.post(port, "localhost", "/api/echo")
@@ -277,9 +280,9 @@ class VertxOtelIntegrationTest {
                         resp -> {
                             testContext.verify(() -> {
                                 JsonObject responseBody = resp.bodyAsJsonObject();
-                                // Body was readable via ctx.getBodyAsJson()
+                                // Body was readable via BodyHandler + ctx.getBodyAsJson()
                                 assertThat(responseBody.getString("msg")).isEqualTo("hello");
-                                // Span.current() returned a valid span (trace_id is non-zero)
+                                // Span is accessible from RoutingContext (trace_id is non-zero)
                                 String traceId = responseBody.getString("traceId");
                                 assertThat(traceId).matches("[0-9a-f]{32}");
                                 assertThat(traceId).isNotEqualTo("00000000000000000000000000000000");
