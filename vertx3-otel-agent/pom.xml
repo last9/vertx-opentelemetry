@@ -33,9 +33,15 @@
 
     <build>
         <plugins>
+            <!-- Compile agent bootstrap with Java 8 target so the JVM can load
+                 AgentBootstrap.class on Java 8 and gracefully bail out before
+                 touching any Java 11-compiled classes in agent-impl.jar. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>8</release>
+                </configuration>
             </plugin>
 
             <!-- Embed the library fat JAR inside inst/ directory.
