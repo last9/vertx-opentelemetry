@@ -29,6 +29,24 @@ jobs:
       - name: Build JARs
         run: mvn package -B --no-transfer-progress -DskipTests
 
+      - name: Verify ByteBuddy relocation
+        run: |
+          echo "Checking v3 shaded JAR..."
+          V3_JAR=$(ls vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-*.jar | grep -v javadoc | grep -v sources | head -1)
+          ORIGINAL=$(unzip -l "$V3_JAR" | grep -c "net/bytebuddy/" || true)
+          RELOCATED=$(unzip -l "$V3_JAR" | grep -c "io/last9/internal/bytebuddy/" || true)
+          echo "  net/bytebuddy/ classes: $ORIGINAL (must be 0)"
+          echo "  io/last9/internal/bytebuddy/ classes: $RELOCATED (must be >0)"
+          if [ "$ORIGINAL" -ne 0 ]; then
+            echo "FAIL: net/bytebuddy/ classes found in shaded JAR — relocation broken"
+            exit 1
+          fi
+          if [ "$RELOCATED" -eq 0 ]; then
+            echo "FAIL: no relocated ByteBuddy classes found — relocation missing"
+            exit 1
+          fi
+          echo "PASS: ByteBuddy correctly relocated to io.last9.internal.bytebuddy"
+
       - name: Upload JARs
         uses: actions/upload-artifact@v4
         with:
