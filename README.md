@@ -109,14 +109,16 @@ TracedDBPool traced = TracedDBPool.wrap(PgPool.pool(vertx, opts, poolOpts), "pos
 traced.query("SELECT * FROM orders").subscribe(rows -> { ... });
 ```
 
-## Java 8 Compatibility
+## Java 8 Support
 
-The agent works on **Java 8+** JVMs:
+**Full instrumentation works on Java 8+.** The entire stack — OTel SDK, ByteBuddy, OkHttp OTLP sender — supports Java 8.
 
-- **Java 8**: Agent prints `"Requires Java 11+"` and **skips instrumentation**. App starts normally with zero overhead — no crash, no `UnsupportedClassVersionError`.
-- **Java 11+**: Full instrumentation. OkHttp OTLP sender exports traces (shaded as `io.last9.internal.okhttp3` to avoid classpath conflicts).
+```bash
+# Works on Java 8, 11, 17, 21 — same JAR, same command
+java -javaagent:vertx3-otel-agent.jar -jar my-app.jar
+```
 
-Ship the agent with every deployment — it's safe on any JVM version.
+The agent uses the OkHttp-based OTLP sender (shaded as `io.last9.internal.okhttp3`) instead of the JDK HttpClient sender, making it compatible with Java 8 JVMs where `java.net.http.HttpClient` is not available.
 
 ## Deployment
 
@@ -237,7 +239,7 @@ Tagged pre-releases appear on the [Releases](https://github.com/last9/vertx-open
 
 | Module | Java | Vert.x | RxJava |
 |--------|------|--------|--------|
-| `vertx3-otel-agent` (agent JAR) | **8+** (instruments on 11+) | 3.9+ | 2.x |
+| `vertx3-otel-agent` (agent JAR) | **8+** | 3.9+ | 2.x |
 | `vertx4-rxjava3-otel-autoconfigure` | 11+ | 4.5+ | 3.x |
 | `vertx3-rxjava2-otel-autoconfigure` | 11+ | 3.9+ | 2.x |
 
