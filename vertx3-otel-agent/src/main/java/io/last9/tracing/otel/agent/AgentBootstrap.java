@@ -83,20 +83,6 @@ public final class AgentBootstrap {
      * Called by the JVM before the application's {@code main} method.
      */
     public static void premain(String agentArgs, Instrumentation inst) {
-        // Java 8 guard — this class is compiled to class file 52 (Java 8) so that
-        // the JVM can load and execute this check before touching agent-impl.jar
-        // (which is compiled to class file 55 / Java 11).
-        // java.class.version: 52.0 = Java 8, 53.0 = Java 9, ..., 55.0 = Java 11.
-        String classVersion = System.getProperty("java.class.version", "52.0");
-        int majorClassVersion = (int) Double.parseDouble(classVersion);
-        if (majorClassVersion < 55) {
-            log("[Last9 OTel Agent] Requires Java 11+. Detected: Java "
-                    + System.getProperty("java.version")
-                    + " (class file version " + classVersion + ")."
-                    + " Skipping instrumentation — application will start normally.");
-            return;
-        }
-
         try {
             // 1. Extract embedded library JAR and inject onto the system classloader.
             //    This makes OTel SDK, ByteBuddy, and all helper classes available to
