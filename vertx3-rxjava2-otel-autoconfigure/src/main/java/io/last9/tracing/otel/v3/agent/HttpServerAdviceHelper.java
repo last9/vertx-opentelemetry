@@ -124,11 +124,10 @@ public final class HttpServerAdviceHelper {
                     span.setAttribute(SemanticAttributes.SERVER_PORT, serverPort);
                 }
 
-                // Store span on request for later retrieval (route pattern update, etc.)
-                request.localAddress(); // ensure request is valid
-                Scope scope = span.makeCurrent();
-
-                // Set response attributes and end span when body is fully sent
+                // Set response attributes and end span when body is fully sent.
+                // The span is NOT ended here — it's ended in bodyEndHandler after the
+                // response is fully sent. But the SCOPE must be closed immediately after
+                // the handler returns to avoid context leaks on the event loop thread.
                 HttpServerResponse response = request.response();
                 response.headersEndHandler(v -> {
                     int statusCode = response.getStatusCode();
@@ -138,22 +137,25 @@ public final class HttpServerAdviceHelper {
                     }
                 });
 
-                response.bodyEndHandler(v -> {
-                    span.end();
-                    scope.close();
-                });
+                response.bodyEndHandler(v -> span.end());
 
                 // Handle connection reset / close before response
                 response.closeHandler(v -> {
                     if (!response.ended()) {
                         span.setStatus(StatusCode.ERROR, "Connection closed before response completed");
                         span.end();
-                        scope.close();
                     }
                 });
 
-                // Delegate to the original handler
-                original.handle(request);
+                // Make span current, delegate to original handler, then close scope.
+                // CRITICAL: scope must close when handle() returns — NOT in bodyEndHandler.
+                // Vert.x runs all requests on a single event loop thread. If the scope
+                // stays open after handle() returns, the next request on the same thread
+                // inherits a stale scope, causing context confusion and orphan spans.
+                Context otelContext = parentContext.with(span);
+                try (Scope ignored = otelContext.makeCurrent()) {
+                    original.handle(request);
+                }
             }
         };
 
