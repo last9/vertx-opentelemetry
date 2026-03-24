@@ -18,8 +18,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Set;
-import java.util.WeakHashMap;
 
 /**
  * Helper for {@link HttpServerAdvice}. Wraps an HTTP request handler with
@@ -42,7 +42,7 @@ public final class HttpServerAdviceHelper {
      * is called multiple times with the same handler.
      */
     private static final Set<Handler<?>> WRAPPED = Collections.synchronizedSet(
-            Collections.newSetFromMap(new WeakHashMap<Handler<?>, Boolean>()));
+            Collections.newSetFromMap(new IdentityHashMap<Handler<?>, Boolean>()));
 
     private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<HttpServerRequest>() {
         @Override
@@ -83,11 +83,13 @@ public final class HttpServerAdviceHelper {
 
         log.info("HttpServerAdviceHelper: wrapping requestHandler with SERVER span creation");
 
+        // Capture tracer and propagator once at wrap time (server startup), not per-request.
+        final Tracer tracer = GlobalOpenTelemetry.getTracer(TRACER_NAME);
+        final TextMapPropagator propagator = GlobalOpenTelemetry.getPropagators().getTextMapPropagator();
+
         Handler<HttpServerRequest> wrapped = new Handler<HttpServerRequest>() {
             @Override
             public void handle(HttpServerRequest request) {
-                Tracer tracer = GlobalOpenTelemetry.getTracer(TRACER_NAME);
-                TextMapPropagator propagator = GlobalOpenTelemetry.getPropagators().getTextMapPropagator();
 
                 String method = request.method().name();
                 String path = request.path();

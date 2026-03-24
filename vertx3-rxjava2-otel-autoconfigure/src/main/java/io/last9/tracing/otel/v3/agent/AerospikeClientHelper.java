@@ -77,7 +77,7 @@ public final class AerospikeClientHelper {
      * Starts a CLIENT span for batch Aerospike operations.
      */
     public static Span startBatchSpan(String operation, Key[] keys) {
-        if (AgentGuard.IN_DB_TRACED_CALL.get()) {
+        if (AgentGuard.IN_DB_TRACED_CALL.get() || IN_AEROSPIKE_CALL.get()) {
             return null;
         }
 

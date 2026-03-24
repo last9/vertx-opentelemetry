@@ -162,9 +162,7 @@ public final class TracedRouter {
             // Check if HttpServerAdvice already created a SERVER span for this request.
             // If so, adopt it (add route info) instead of creating a duplicate.
             Span existingSpan = Span.current();
-            boolean spanFromHttpServer = existingSpan.getSpanContext().isValid()
-                    && !existingSpan.getSpanContext().equals(
-                            Span.getInvalid().getSpanContext());
+            boolean spanFromHttpServer = existingSpan.getSpanContext().isValid();
 
             Span span;
             Context otelContext;

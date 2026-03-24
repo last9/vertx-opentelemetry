@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Helper for {@link AerospikeSyncCommandAdvice}. Extracts the operation name
@@ -39,6 +40,20 @@ public final class AerospikeSyncCommandHelper {
         COMMAND_TO_OP.put("OperateCommand", "OPERATE");
     }
 
+    /** Cache resolved Field per command class — avoids repeated reflection on every call. */
+    private static final ConcurrentHashMap<Class<?>, Field> KEY_FIELD_CACHE =
+            new ConcurrentHashMap<Class<?>, Field>();
+
+    /** Sentinel value for classes that have no 'key' field. */
+    private static final Field NO_KEY_FIELD;
+    static {
+        try {
+            NO_KEY_FIELD = AerospikeSyncCommandHelper.class.getDeclaredField("KEY_FIELD_CACHE");
+        } catch (NoSuchFieldException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     private AerospikeSyncCommandHelper() {}
 
     /**
@@ -47,10 +62,7 @@ public final class AerospikeSyncCommandHelper {
      * Returns null if already inside a traced call or if extraction fails.
      */
     public static Span startSpan(Object command) {
-        if (AgentGuard.IN_DB_TRACED_CALL.get()) {
-            return null;
-        }
-
+        // Guard check delegated to AerospikeClientHelper.startSpan()
         String className = command.getClass().getSimpleName();
         String operation = COMMAND_TO_OP.get(className);
         if (operation == null) {
@@ -67,27 +79,41 @@ public final class AerospikeSyncCommandHelper {
     }
 
     /**
-     * Extracts the {@code key} field from the command object by walking up the class hierarchy.
-     * Returns null if no key field is found (e.g., batch commands without a single key).
+     * Extracts the {@code key} field from the command object. Uses a per-class cache
+     * to avoid repeated reflection on every Aerospike call (~6 concrete command classes).
      */
     private static Key extractKey(Object command) {
-        Class<?> clazz = command.getClass();
+        Class<?> commandClass = command.getClass();
+        Field cached = KEY_FIELD_CACHE.get(commandClass);
+
+        if (cached == NO_KEY_FIELD) {
+            return null;
+        }
+        if (cached != null) {
+            try {
+                return (Key) cached.get(command);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        // First time seeing this class — walk hierarchy once, cache result
+        Class<?> clazz = commandClass;
         while (clazz != null && clazz != Object.class) {
             try {
                 Field keyField = clazz.getDeclaredField("key");
                 keyField.setAccessible(true);
+                KEY_FIELD_CACHE.put(commandClass, keyField);
                 Object value = keyField.get(command);
-                if (value instanceof Key) {
-                    return (Key) value;
-                }
+                return value instanceof Key ? (Key) value : null;
             } catch (NoSuchFieldException e) {
-                // Try parent class
+                clazz = clazz.getSuperclass();
             } catch (Exception e) {
-                log.debug("Failed to extract Aerospike key from {}: {}", clazz.getSimpleName(), e.getMessage());
+                KEY_FIELD_CACHE.put(commandClass, NO_KEY_FIELD);
                 return null;
             }
-            clazz = clazz.getSuperclass();
         }
+        KEY_FIELD_CACHE.put(commandClass, NO_KEY_FIELD);
         return null;
     }
 }

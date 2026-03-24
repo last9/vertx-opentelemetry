@@ -90,9 +90,7 @@ public final class CoreTracedRouter {
 
             // Check if HttpServerAdvice already created a SERVER span
             Span existingSpan = Span.current();
-            boolean spanFromHttpServer = existingSpan.getSpanContext().isValid()
-                    && !existingSpan.getSpanContext().equals(
-                            Span.getInvalid().getSpanContext());
+            boolean spanFromHttpServer = existingSpan.getSpanContext().isValid();
 
             Span span;
             Context otelContext;
