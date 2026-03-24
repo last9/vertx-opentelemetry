@@ -133,6 +133,11 @@ public final class Vertx3Instrumenter {
 
         log.info("Vertx3Instrumenter: bytecode instrumentation installed (Router, WebClient)");
 
+        // HttpServer.requestHandler() — creates SERVER spans for ALL incoming HTTP requests,
+        // regardless of whether a Router is used. This is critical for apps that use custom
+        // dispatchers or custom frameworks that don't route through Router.
+        installHttpServerInstrumentation(inst, listener);
+
         // --- Raw client library instrumentation ---
         // These are registered separately because the classes may not be on the classpath
         // (they're optional dependencies). Each is wrapped in try-catch so a missing
@@ -150,6 +155,31 @@ public final class Vertx3Instrumenter {
         installLettuceInstrumentation(inst, listener);
         installNettyHttpClientInstrumentation(inst, listener);
         installSqsInstrumentation(inst, listener);
+    }
+
+    /**
+     * HttpServer: intercept {@code HttpServerImpl.requestHandler(Handler)} to wrap the handler
+     * with SERVER span creation. This creates SERVER spans for ALL incoming HTTP requests,
+     * regardless of whether a Vert.x Router is used.
+     */
+    private static void installHttpServerInstrumentation(Instrumentation inst,
+                                                          AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.vertx.core.http.impl.HttpServerImpl"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(HttpServerAdvice.class)
+                                    .on(named("requestHandler")
+                                            .and(takesArguments(1))
+                                            .and(takesArgument(0, named("io.vertx.core.Handler"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: HTTP server instrumentation installed (SERVER spans for all requests)");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: HTTP server instrumentation skipped: {}", t.getMessage());
+        }
     }
 
     /**

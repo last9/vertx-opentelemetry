@@ -88,33 +88,49 @@ public final class CoreTracedRouter {
             String method = request.method().name();
             String path = request.path();
 
-            // Use Context.root() to avoid context leak on Vert.x event loop
-            Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
+            // Check if HttpServerAdvice already created a SERVER span
+            Span existingSpan = Span.current();
+            boolean spanFromHttpServer = existingSpan.getSpanContext().isValid()
+                    && !existingSpan.getSpanContext().equals(
+                            Span.getInvalid().getSpanContext());
 
-            String hostHeader = request.host();
-            String serverAddr = hostHeader;
-            long serverPort = -1;
-            if (hostHeader != null && hostHeader.contains(":")) {
-                int idx = hostHeader.lastIndexOf(':');
-                serverAddr = hostHeader.substring(0, idx);
-                try {
-                    serverPort = Long.parseLong(hostHeader.substring(idx + 1));
-                } catch (NumberFormatException ignored) {
+            Span span;
+            Context otelContext;
+
+            if (spanFromHttpServer) {
+                span = existingSpan;
+                otelContext = Context.current();
+            } else {
+                Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
+
+                String hostHeader = request.host();
+                String serverAddr = hostHeader;
+                long serverPort = -1;
+                if (hostHeader != null && hostHeader.contains(":")) {
+                    int idx = hostHeader.lastIndexOf(':');
+                    serverAddr = hostHeader.substring(0, idx);
+                    try {
+                        serverPort = Long.parseLong(hostHeader.substring(idx + 1));
+                    } catch (NumberFormatException ignored) {
+                    }
                 }
-            }
 
-            Span span = tracer.spanBuilder(method + " " + path)
-                    .setParent(parentContext)
-                    .setSpanKind(SpanKind.SERVER)
-                    .setAttribute(SemanticAttributes.HTTP_REQUEST_METHOD, method)
-                    .setAttribute(SemanticAttributes.URL_PATH, path)
-                    .setAttribute(SemanticAttributes.URL_SCHEME,
-                            request.isSSL() ? "https" : "http")
-                    .setAttribute(SemanticAttributes.SERVER_ADDRESS, serverAddr)
-                    .startSpan();
+                span = tracer.spanBuilder(method + " " + path)
+                        .setParent(parentContext)
+                        .setSpanKind(SpanKind.SERVER)
+                        .setAttribute(SemanticAttributes.HTTP_REQUEST_METHOD, method)
+                        .setAttribute(SemanticAttributes.URL_PATH, path)
+                        .setAttribute(SemanticAttributes.URL_SCHEME,
+                                request.isSSL() ? "https" : "http")
+                        .setAttribute(SemanticAttributes.SERVER_ADDRESS, serverAddr)
+                        .startSpan();
 
-            if (serverPort > 0) {
-                span.setAttribute(SemanticAttributes.SERVER_PORT, serverPort);
+                if (serverPort > 0) {
+                    span.setAttribute(SemanticAttributes.SERVER_PORT, serverPort);
+                }
+
+                otelContext = parentContext.with(span);
+                ctx.response().bodyEndHandler(v -> span.end());
             }
 
             ctx.put(SPAN_KEY, span);
@@ -140,17 +156,6 @@ public final class CoreTracedRouter {
                 }
             });
 
-            ctx.response().bodyEndHandler(v -> span.end());
-
-            Context otelContext = parentContext.with(span);
-
-            // Make the OTel context current and proceed to the next handler.
-            // Do NOT use request.bodyHandler() here — it consumes the request body,
-            // which conflicts with applications that use BodyHandler or read the body
-            // themselves (e.g., context.getBodyAsJson()). If our bodyHandler runs
-            // first, the app's BodyHandler never fires; if the app's BodyHandler runs
-            // first, our bodyHandler never fires and ctx.next() is never called,
-            // causing "Empty reply from server".
             try (Scope ignored = otelContext.makeCurrent()) {
                 ctx.next();
             }
