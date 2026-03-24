@@ -47,8 +47,8 @@ class HttpServerAdviceHelperTest {
         webClient = WebClient.create(vertx);
 
         // Simulate a custom request handler that does NOT use Router.
-        // This is the exact pattern that Dream11 / AbstractApplication uses:
-        // httpServer.requestHandler(customDispatcher) instead of httpServer.requestHandler(router)
+        // Apps with custom frameworks use httpServer.requestHandler(customDispatcher)
+        // instead of httpServer.requestHandler(router)
         Handler<HttpServerRequest> customDispatcher = request -> {
             // Custom dispatch logic — no Router involved
             if ("/api/hello".equals(request.path())) {

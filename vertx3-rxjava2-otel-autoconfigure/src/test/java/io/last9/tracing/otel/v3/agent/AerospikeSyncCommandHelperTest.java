@@ -60,7 +60,7 @@ class AerospikeSyncCommandHelperTest {
         // Simulate what SyncCommand advice does: extract key from a command object.
         // We can't instantiate real SyncCommand (needs Cluster), but we can test
         // the helper's startSpan directly with the operation + key pattern.
-        Key key = new Key("fantasy_tour", "round", "113087");
+        Key key = new Key("my_app", "round", "113087");
         Span span = AerospikeSyncCommandHelper.startSpan(mockCommandObject("ReadCommand", key));
 
         assertThat(span).isNotNull();
@@ -69,10 +69,10 @@ class AerospikeSyncCommandHelperTest {
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         // MockCommand → "MOCK" operation (real ReadCommand → "GET")
         // Key extraction works: namespace.setName from the key field
-        assertThat(sd.getName()).contains("fantasy_tour.round");
+        assertThat(sd.getName()).contains("my_app.round");
         assertThat(sd.getKind()).isEqualTo(SpanKind.CLIENT);
         assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.system"))).isEqualTo("aerospike");
-        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.name"))).isEqualTo("fantasy_tour");
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.name"))).isEqualTo("my_app");
     }
 
     @Test
@@ -138,7 +138,7 @@ class AerospikeSyncCommandHelperTest {
     void wrapperServicePatternProducesSpan() {
         // Reproduces the customer pattern: custom AerospikeService wrapper
         // that calls AerospikeClient internally.
-        Key key = new Key("fantasy_tour", "activeRounds", "31");
+        Key key = new Key("my_app", "activeRounds", "31");
 
         // Simulate what SyncCommand.execute() advice does:
         // 1. Extract operation from command class name
@@ -156,14 +156,14 @@ class AerospikeSyncCommandHelperTest {
 
         assertThat(aerospikeSpans).hasSize(1);
         SpanData sd = aerospikeSpans.get(0);
-        assertThat(sd.getName()).isEqualTo("aerospike GET fantasy_tour.activeRounds");
+        assertThat(sd.getName()).isEqualTo("aerospike GET my_app.activeRounds");
         assertThat(sd.getKind()).isEqualTo(SpanKind.CLIENT);
         assertThat(sd.getStatus().getStatusCode()).isNotEqualTo(StatusCode.ERROR);
     }
 
     @Test
     void wrapperServicePatternRecordsAerospikeError() {
-        Key key = new Key("fantasy_tour", "round", "113087");
+        Key key = new Key("my_app", "round", "113087");
         Span span = AerospikeClientHelper.startSpan("GET", key);
         assertThat(span).isNotNull();
 

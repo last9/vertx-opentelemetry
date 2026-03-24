@@ -355,7 +355,7 @@ public final class Vertx3Instrumenter {
      * to create SERVER spans for JAX-RS endpoints running on Vert.x.
      *
      * <p>This covers applications that use RESTEasy for business routes instead of
-     * the Vert.x Router (e.g., fantasy-tour-v1). The dispatch is synchronous, so
+     * the Vert.x Router directly. The dispatch is synchronous, so
      * the OTel context is current during the entire resource method execution.
      */
     private static void installResteasyInstrumentation(Instrumentation inst,
