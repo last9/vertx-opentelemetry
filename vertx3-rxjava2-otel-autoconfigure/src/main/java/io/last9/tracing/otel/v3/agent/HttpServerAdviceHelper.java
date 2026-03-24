@@ -58,6 +58,11 @@ public final class HttpServerAdviceHelper {
 
     private HttpServerAdviceHelper() {}
 
+    /** Reset state for testing. */
+    static void resetForTest() {
+        WRAPPED.clear();
+    }
+
     /**
      * Wraps the given handler (if it's a Handler) with SERVER span creation.
      * Returns the original handler if it's already wrapped or not a Handler.
@@ -123,14 +128,17 @@ public final class HttpServerAdviceHelper {
                 request.localAddress(); // ensure request is valid
                 Scope scope = span.makeCurrent();
 
-                // End span when response completes
+                // Set response attributes and end span when body is fully sent
                 HttpServerResponse response = request.response();
-                response.endHandler(v -> {
+                response.headersEndHandler(v -> {
                     int statusCode = response.getStatusCode();
                     span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, (long) statusCode);
                     if (statusCode >= 500) {
                         span.setStatus(StatusCode.ERROR);
                     }
+                });
+
+                response.bodyEndHandler(v -> {
                     span.end();
                     scope.close();
                 });
