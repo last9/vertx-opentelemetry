@@ -29,6 +29,42 @@ jobs:
       - name: Build JARs
         run: mvn package -B --no-transfer-progress -DskipTests
 
+      - name: Verify relocations in shaded JAR
+        run: |
+          echo "Checking v3 shaded JAR..."
+          V3_JAR=$(ls vertx3-rxjava2-otel-autoconfigure/target/vertx3-rxjava2-otel-autoconfigure-*.jar | grep -v javadoc | grep -v sources | head -1)
+
+          check_relocation() {
+            local orig_pkg="$1" relocated_pkg="$2" label="$3"
+            # Use awk to extract file paths and anchor match to avoid substring false positives
+            # (e.g. "okhttp3/" matching inside "io/last9/internal/okhttp3/")
+            ORIGINAL=$(unzip -l "$V3_JAR" | awk '{print $NF}' | grep -c "^${orig_pkg}" || true)
+            RELOCATED=$(unzip -l "$V3_JAR" | awk '{print $NF}' | grep -c "^${relocated_pkg}" || true)
+            echo "  $label: $orig_pkg=$ORIGINAL (must be 0), $relocated_pkg=$RELOCATED (must be >0)"
+            if [ "$ORIGINAL" -ne 0 ]; then echo "FAIL: unrelocated $label classes found"; exit 1; fi
+            if [ "$RELOCATED" -eq 0 ]; then echo "FAIL: no relocated $label classes found"; exit 1; fi
+          }
+
+          check_relocation "net/bytebuddy/" "io/last9/internal/bytebuddy/" "ByteBuddy"
+          check_relocation "okhttp3/" "io/last9/internal/okhttp3/" "OkHttp"
+          check_relocation "kotlin/" "io/last9/internal/kotlin/" "Kotlin-stdlib"
+          echo "PASS: ByteBuddy, OkHttp, and Kotlin correctly relocated"
+
+      - name: Verify agent Java 8 compatibility
+        run: |
+          echo "Checking agent JAR class file version..."
+          AGENT_JAR=$(ls vertx3-otel-agent/target/vertx3-otel-agent-*.jar | grep -v javadoc | grep -v sources | head -1)
+          # Extract AgentBootstrap.class and check its magic bytes for major version
+          # Class file format: 4 bytes magic (0xCAFEBABE), 2 bytes minor, 2 bytes major
+          # major 52 = Java 8, 55 = Java 11
+          MAJOR=$(unzip -p "$AGENT_JAR" io/last9/tracing/otel/agent/AgentBootstrap.class | od -An -tx1 -j6 -N2 | tr -d ' \n' | awk '{print toupper($0)}' | xargs -I{} printf "%d" "0x{}")
+          echo "  AgentBootstrap.class major version: $MAJOR (must be 52 for Java 8)"
+          if [ "$MAJOR" -ne 52 ]; then
+            echo "FAIL: agent bootstrap compiled to class file $MAJOR, not 52 — Java 8 JVMs will crash"
+            exit 1
+          fi
+          echo "PASS: agent bootstrap compiled to class file 52 (Java 8 compatible)"
+
       - name: Upload JARs
         uses: actions/upload-artifact@v4
         with:

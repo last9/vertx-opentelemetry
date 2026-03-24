@@ -15,7 +15,10 @@ import io.opentelemetry.instrumentation.runtimemetrics.java8.MemoryPools;
 import io.opentelemetry.instrumentation.runtimemetrics.java8.Threads;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -110,15 +113,15 @@ public final class OtelSdkSetup {
                     "opentelemetry-java-instrumentation"));
 
             OpenTelemetrySdk sdk = AutoConfiguredOpenTelemetrySdk.builder()
-                    // Default to http/protobuf so the bundled JDK sender is used.
-                    // The default gRPC protocol requires okhttp3 which is NOT bundled.
-                    // Customers can override with OTEL_EXPORTER_OTLP_PROTOCOL=grpc if they
-                    // add okhttp3 to their own classpath.
+                    // Default to http/protobuf. OkHttp sender supports both http/protobuf
+                    // and grpc. Customers can override with OTEL_EXPORTER_OTLP_PROTOCOL=grpc.
                     .addPropertiesSupplier(() -> {
                         if (System.getenv("OTEL_EXPORTER_OTLP_PROTOCOL") == null) {
-                            return java.util.Map.of("otel.exporter.otlp.protocol", "http/protobuf");
+                            Map<String, String> props = new HashMap<String, String>();
+                            props.put("otel.exporter.otlp.protocol", "http/protobuf");
+                            return props;
                         }
-                        return java.util.Map.of();
+                        return Collections.emptyMap();
                     })
                     .addResourceCustomizer((resource, config) -> resource.merge(distroResource))
                     .setResultAsGlobal()
@@ -262,6 +265,6 @@ public final class OtelSdkSetup {
 
     private static String getEnvOrDefault(String key, String defaultValue) {
         String value = System.getenv(key);
-        return (value != null && !value.isBlank()) ? value : defaultValue;
+        return (value != null && !value.trim().isEmpty()) ? value : defaultValue;
     }
 }

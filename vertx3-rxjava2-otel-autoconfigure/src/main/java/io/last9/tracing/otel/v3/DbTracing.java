@@ -16,6 +16,9 @@ import io.reactivex.Single;
 
 import io.last9.tracing.otel.v3.agent.AgentGuard;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Supplier;
 
@@ -259,9 +262,10 @@ public final class DbTracing {
         }
     }
 
-    private static final Set<String> SQL_SYSTEMS = Set.of(
-            "mysql", "postgresql", "mariadb", "mssql", "oracle", "sqlite",
-            "db2", "h2", "hsqldb", "other_sql");
+    private static final Set<String> SQL_SYSTEMS = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList(
+                    "mysql", "postgresql", "mariadb", "mssql", "oracle", "sqlite",
+                    "db2", "h2", "hsqldb", "other_sql")));
 
     private Span startSpan(String operation) {
         String spanName;

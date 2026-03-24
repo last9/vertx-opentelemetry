@@ -6,7 +6,7 @@
 
     <groupId>io.last9</groupId>
     <artifactId>vertx-otel-autoconfigure</artifactId>
-    <version>2.2.2-beta.3</version>
+    <version>2.2.2-beta.7</version>
     <packaging>pom</packaging>
 
     <name>Vert.x OpenTelemetry Auto-Configure</name>
@@ -354,15 +354,42 @@
                                         <include>io.vertx:vertx-micrometer-metrics</include>
                                         <include>io.micrometer:micrometer-core</include>
                                         <include>io.micrometer:micrometer-commons</include>
+                                        <!-- OkHttp transport for OTLP export (replaces sender-jdk).
+                                             Shaded to avoid conflicts with customer fat JARs that
+                                             bundle their own OkHttp (e.g. Retrofit, Ktor). -->
+                                        <include>com.squareup.okhttp3:okhttp</include>
+                                        <include>com.squareup.okio:okio</include>
+                                        <include>com.squareup.okio:okio-jvm</include>
+                                        <include>org.jetbrains.kotlin:kotlin-stdlib</include>
                                     </includes>
-                                    <!-- Exclude the OkHttp-based OTel sender: its SPI file would
-                                         register OkHttpHttpSenderProvider alongside JdkHttpSenderProvider
-                                         causing a "Multiple HttpSenderProvider found" error at startup.
-                                         We still bundle okhttp3 itself (above) for the AWS detector. -->
-                                    <excludes>
-                                        <exclude>io.opentelemetry:opentelemetry-exporter-sender-okhttp</exclude>
-                                    </excludes>
                                 </artifactSet>
+                                <!-- Relocate ByteBuddy to avoid conflicts with applications
+                                     that bundle their own ByteBuddy version in fat JARs.
+                                     Without relocation, the app's older ByteBuddy classes
+                                     (e.g., from Mockito, Hibernate, or direct dependency)
+                                     can shadow ours, causing AgentBuilder.Transformer
+                                     method signature mismatches and silent transform failures. -->
+                                <relocations>
+                                    <relocation>
+                                        <pattern>net.bytebuddy</pattern>
+                                        <shadedPattern>io.last9.internal.bytebuddy</shadedPattern>
+                                    </relocation>
+                                    <!-- Shade OkHttp + OkIO + Kotlin stdlib to avoid classpath
+                                         conflicts with customer fat JARs that bundle their own
+                                         OkHttp (e.g. Retrofit, AWS SDK) or Kotlin runtime. -->
+                                    <relocation>
+                                        <pattern>okhttp3</pattern>
+                                        <shadedPattern>io.last9.internal.okhttp3</shadedPattern>
+                                    </relocation>
+                                    <relocation>
+                                        <pattern>okio</pattern>
+                                        <shadedPattern>io.last9.internal.okio</shadedPattern>
+                                    </relocation>
+                                    <relocation>
+                                        <pattern>kotlin</pattern>
+                                        <shadedPattern>io.last9.internal.kotlin</shadedPattern>
+                                    </relocation>
+                                </relocations>
                                 <transformers>
                                     <!-- Merge META-INF/services SPI files from all bundled JARs.
                                          Without this, only one ResourceProvider set survives shading

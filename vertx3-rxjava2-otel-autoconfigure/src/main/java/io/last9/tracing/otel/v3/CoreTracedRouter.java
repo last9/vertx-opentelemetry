@@ -44,7 +44,7 @@ public final class CoreTracedRouter {
     static final Set<Router> INSTRUMENTED = Collections.synchronizedSet(
             Collections.newSetFromMap(new WeakHashMap<>()));
 
-    private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<>() {
+    private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<HttpServerRequest>() {
         @Override
         public Iterable<String> keys(HttpServerRequest carrier) {
             return carrier.headers().names();
@@ -144,14 +144,16 @@ public final class CoreTracedRouter {
 
             Context otelContext = parentContext.with(span);
 
-            request.bodyHandler(body -> {
-                if (body.length() > 0) {
-                    ctx.setBody(body);
-                }
-                try (Scope ignored = otelContext.makeCurrent()) {
-                    ctx.next();
-                }
-            });
+            // Make the OTel context current and proceed to the next handler.
+            // Do NOT use request.bodyHandler() here — it consumes the request body,
+            // which conflicts with applications that use BodyHandler or read the body
+            // themselves (e.g., context.getBodyAsJson()). If our bodyHandler runs
+            // first, the app's BodyHandler never fires; if the app's BodyHandler runs
+            // first, our bodyHandler never fires and ctx.next() is never called,
+            // causing "Empty reply from server".
+            try (Scope ignored = otelContext.makeCurrent()) {
+                ctx.next();
+            }
         });
 
         router.route().order(Integer.MAX_VALUE - 1).handler(ctx -> {

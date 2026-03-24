@@ -69,7 +69,7 @@ public final class TracedRouter {
     private static final Set<Router> INSTRUMENTED = Collections.synchronizedSet(
             Collections.newSetFromMap(new WeakHashMap<>()));
 
-    private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<>() {
+    private static final TextMapGetter<HttpServerRequest> HEADER_GETTER = new TextMapGetter<HttpServerRequest>() {
         @Override
         public Iterable<String> keys(HttpServerRequest carrier) {
             return carrier.headers().names();
@@ -227,21 +227,21 @@ public final class TracedRouter {
             // 5. Build the OTel context containing the new span
             Context otelContext = parentContext.with(span);
 
-            // 6. Buffer the request body, then advance the handler chain with the span
-            //    active in the OTel ThreadLocal. Using bodyHandler (rather than calling
-            //    ctx.next() synchronously) is critical: Vert.x 3 always delivers body
-            //    data asynchronously via request.endHandler, even for requests with no
-            //    body. A synchronous try-with-resources would close the scope before
-            //    downstream handlers run, making Span.current() return the root (no-op)
-            //    span and leaving trace_id/span_id empty in log MDC.
-            request.bodyHandler(body -> {
-                if (body.length() > 0) {
-                    ctx.setBody(body);
-                }
-                try (Scope ignored = otelContext.makeCurrent()) {
-                    ctx.next();
-                }
-            });
+            // 6. Make the OTel context current and proceed to the next handler.
+            //    Do NOT use request.bodyHandler() here — it consumes the request body,
+            //    which conflicts with applications that use BodyHandler or read the body
+            //    themselves (e.g., context.getBodyAsJson()). If both our bodyHandler and
+            //    the app's BodyHandler are registered, one of them never fires, causing
+            //    either ctx.next() to never be called ("Empty reply from server") or
+            //    the app to receive an empty body.
+            //
+            //    The scope closes when ctx.next() returns (before async handlers run),
+            //    so Span.current() won't work in async handler code. But the span is
+            //    stored on the RoutingContext and ends via bodyEndHandler — trace
+            //    correlation in logs still works via the MDC filter.
+            try (Scope ignored = otelContext.makeCurrent()) {
+                ctx.next();
+            }
         });
 
         // Low-priority handler: capture the matched route path after route matching

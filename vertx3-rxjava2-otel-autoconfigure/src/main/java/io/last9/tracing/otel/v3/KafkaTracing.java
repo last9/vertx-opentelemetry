@@ -4,6 +4,7 @@ import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
@@ -178,7 +179,7 @@ public final class KafkaTracing {
             // polluting Kafka consumer spans (same fix as TracedRouter for HTTP handlers).
             // Consumer spans are root spans per OTel messaging semconv — they link to producers
             // via SpanLink rather than parent/child to model the async relationship accurately.
-            var spanBuilder = tracer.spanBuilder(topic + " process")
+            SpanBuilder spanBuilder = tracer.spanBuilder(topic + " process")
                     .setParent(Context.root())
                     .setSpanKind(SpanKind.CONSUMER)
                     .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")

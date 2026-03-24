@@ -19,6 +19,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -83,17 +84,21 @@ class VertxOtelIntegrationTest {
 
         router.get("/api/error").handler(ctx -> ctx.response().setStatusCode(500).end("error"));
 
-        // POST handler: verifies body is readable AND span is current (Bug 1 regression test).
-        // TracedRouter buffers the body before calling ctx.next(), so ctx.getBodyAsJson() must
-        // work here without a separate BodyHandler.
-        router.post("/api/echo").handler(ctx -> {
-            String traceId = Span.current().getSpanContext().getTraceId();
-            JsonObject body = ctx.getBodyAsJson();
-            String msg = body != null ? body.getString("msg", "null") : "null";
-            ctx.response()
-                    .putHeader("content-type", "application/json")
-                    .end(new JsonObject().put("msg", msg).put("traceId", traceId).encode());
-        });
+        // POST handler: verifies body is readable via BodyHandler and span is on the context.
+        // TracedRouter no longer buffers the body itself to avoid conflicts with apps that
+        // register their own BodyHandler (which caused "Empty reply from server").
+        router.post("/api/echo")
+                .handler(io.vertx.reactivex.ext.web.handler.BodyHandler.create())
+                .handler(ctx -> {
+                    // Span is stored on the RoutingContext, not in ThreadLocal scope
+                    Span span = ctx.get("otel.span");
+                    String traceId = span != null ? span.getSpanContext().getTraceId() : "no-span";
+                    JsonObject body = ctx.getBodyAsJson();
+                    String msg = body != null ? body.getString("msg", "null") : "null";
+                    ctx.response()
+                            .putHeader("content-type", "application/json")
+                            .end(new JsonObject().put("msg", msg).put("traceId", traceId).encode());
+                });
 
         // Downstream receiver: echoes back the traceparent header it received.
         router.get("/api/downstream").handler(ctx -> {
@@ -263,11 +268,10 @@ class VertxOtelIntegrationTest {
     }
 
     @Test
-    void postHandlerBodyReadableAndSpanCurrent(VertxTestContext testContext) throws Exception {
-        // Regression test for Bug 1: span scope was closed before user handlers ran because
-        // BodyHandler is async in Vert.x 3. After the fix, TracedRouter buffers the body via
-        // request.bodyHandler() so ctx.next() is only called after body arrival — with the
-        // span still active in the OTel ThreadLocal.
+    void postHandlerBodyReadableAndSpanOnContext(VertxTestContext testContext) throws Exception {
+        // Verifies that POST body is readable via BodyHandler and the span is accessible
+        // on the RoutingContext. TracedRouter no longer buffers the body itself — apps
+        // must use BodyHandler. The span is stored on ctx as "otel.span".
         JsonObject requestBody = new JsonObject().put("msg", "hello");
 
         webClient.post(port, "localhost", "/api/echo")
@@ -277,12 +281,68 @@ class VertxOtelIntegrationTest {
                         resp -> {
                             testContext.verify(() -> {
                                 JsonObject responseBody = resp.bodyAsJsonObject();
-                                // Body was readable via ctx.getBodyAsJson()
+                                // Body was readable via BodyHandler + ctx.getBodyAsJson()
                                 assertThat(responseBody.getString("msg")).isEqualTo("hello");
-                                // Span.current() returned a valid span (trace_id is non-zero)
+                                // Span is accessible from RoutingContext (trace_id is non-zero)
                                 String traceId = responseBody.getString("traceId");
                                 assertThat(traceId).matches("[0-9a-f]{32}");
                                 assertThat(traceId).isNotEqualTo("00000000000000000000000000000000");
+                            });
+                            testContext.completeNow();
+                        },
+                        testContext::failNow
+                );
+
+        assertThat(testContext.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
+    /**
+     * Simulates the actual agent behavior: CoreRouterAdvice fires on the core Router,
+     * then RouterAdvice fires on the RxJava Router but SKIPS because the core Router
+     * is already in INSTRUMENTED. Only the core-level tracing handler is active.
+     * Tests that SERVER spans still work when the app uses RxJava handlers.
+     */
+    @Test
+    void coreOnlyInstrumentationWithRxJavaHandlers(VertxTestContext testContext) throws Exception {
+        // Create a plain RxJava Router (NOT via TracedRouter.create)
+        Router router = Router.router(vertx);
+
+        // Only instrument the core Router — simulates what happens when
+        // CoreRouterAdvice fires first and TracedRouter.instrumentExisting()
+        // returns early because core Router is already in INSTRUMENTED.
+        CoreTracedRouter.instrumentExisting(router.getDelegate(), otel.getOpenTelemetry());
+
+        // Add a simple handler (like the customer's AbstractRoute pattern)
+        router.get("/api/agent-test").handler(ctx ->
+                ctx.response().end("agent-ok"));
+
+        CountDownLatch serverReady = new CountDownLatch(1);
+        int[] testPort = new int[1];
+        vertx.createHttpServer()
+                .requestHandler(router)
+                .listen(0, ar -> {
+                    testPort[0] = ar.result().actualPort();
+                    serverReady.countDown();
+                });
+        serverReady.await(5, TimeUnit.SECONDS);
+
+        webClient.get(testPort[0], "localhost", "/api/agent-test")
+                .rxSend()
+                .subscribe(
+                        resp -> {
+                            testContext.verify(() -> {
+                                assertThat(resp.statusCode()).isEqualTo(200);
+                                assertThat(resp.bodyAsString()).isEqualTo("agent-ok");
+
+                                // Wait for span export
+                                Thread.sleep(200);
+                                List<SpanData> serverSpans = spanExporter.getFinishedSpanItems().stream()
+                                        .filter(s -> s.getKind() == SpanKind.SERVER)
+                                        .collect(java.util.stream.Collectors.toList());
+
+                                // This MUST produce a SERVER span
+                                assertThat(serverSpans).as("SERVER span should be exported").hasSize(1);
+                                assertThat(serverSpans.get(0).getName()).contains("GET");
                             });
                             testContext.completeNow();
                         },
