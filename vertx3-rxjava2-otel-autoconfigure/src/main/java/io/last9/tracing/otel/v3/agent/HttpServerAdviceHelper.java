@@ -81,7 +81,7 @@ public final class HttpServerAdviceHelper {
             return handler;
         }
 
-        log.debug("HttpServerAdviceHelper: wrapping requestHandler with SERVER span creation");
+        log.info("HttpServerAdviceHelper: wrapping requestHandler with SERVER span creation");
 
         Handler<HttpServerRequest> wrapped = new Handler<HttpServerRequest>() {
             @Override
