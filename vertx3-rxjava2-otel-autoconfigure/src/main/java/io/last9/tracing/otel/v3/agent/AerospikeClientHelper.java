@@ -25,6 +25,14 @@ public final class AerospikeClientHelper {
 
     private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
 
+    /**
+     * Guard to prevent double spans when both AerospikeClientAdvice (on the public API)
+     * and AerospikeSyncCommandAdvice (on the internal command) fire for the same call.
+     * The first advice to enter sets this to true; the second sees it and skips.
+     */
+    static final ThreadLocal<Boolean> IN_AEROSPIKE_CALL =
+            ThreadLocal.withInitial(() -> false);
+
     private AerospikeClientHelper() {}
 
     /**
@@ -36,9 +44,10 @@ public final class AerospikeClientHelper {
      * @return the span, or null if suppressed
      */
     public static Span startSpan(String operation, Key key) {
-        if (AgentGuard.IN_DB_TRACED_CALL.get()) {
+        if (AgentGuard.IN_DB_TRACED_CALL.get() || IN_AEROSPIKE_CALL.get()) {
             return null;
         }
+        IN_AEROSPIKE_CALL.set(true);
 
         Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
 
@@ -103,6 +112,7 @@ public final class AerospikeClientHelper {
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             }
         } finally {
+            IN_AEROSPIKE_CALL.set(false);
             if (scope != null) {
                 scope.close();
             }

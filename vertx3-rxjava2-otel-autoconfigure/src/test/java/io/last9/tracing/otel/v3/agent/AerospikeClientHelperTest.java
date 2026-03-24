@@ -27,6 +27,7 @@ class AerospikeClientHelperTest {
         otel.setUp();
         spanExporter = otel.getSpanExporter();
         AgentGuard.IN_DB_TRACED_CALL.set(false);
+        AerospikeClientHelper.IN_AEROSPIKE_CALL.set(false);
     }
 
     @AfterEach

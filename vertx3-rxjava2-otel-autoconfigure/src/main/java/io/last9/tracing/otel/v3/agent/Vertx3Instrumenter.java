@@ -273,8 +273,26 @@ public final class Vertx3Instrumenter {
 
             log.info("Vertx3Instrumenter: Aerospike client instrumentation installed (single-key + batch)");
         } catch (Throwable t) {
-            log.warn("Vertx3Instrumenter: Aerospike instrumentation skipped — "
+            log.warn("Vertx3Instrumenter: Aerospike client API instrumentation skipped — "
                     + "aerospike-client not on classpath: {}", t.getMessage());
+        }
+
+        // Also instrument at the internal SyncCommand.execute() level — this catches ALL
+        // Aerospike operations regardless of client class, subclass, or proxy.
+        // The AgentGuard prevents duplicate spans when both advices fire.
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("com.aerospike.client.command.SyncCommand"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(AerospikeSyncCommandAdvice.class)
+                                    .on(named("execute").and(takesArguments(0)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Aerospike SyncCommand instrumentation installed (command-level)");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: Aerospike SyncCommand instrumentation skipped: {}", t.getMessage());
         }
     }
 
