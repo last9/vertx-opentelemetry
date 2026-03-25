@@ -80,6 +80,7 @@ public final class AerospikeClientHelper {
         if (AgentGuard.IN_DB_TRACED_CALL.get() || IN_AEROSPIKE_CALL.get()) {
             return null;
         }
+        IN_AEROSPIKE_CALL.set(true);
 
         Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
 

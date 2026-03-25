@@ -6,8 +6,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Helper for {@link RxRouterAdvice}. Calls {@link SpanNameUpdater#addToAllRoutes(Router)}
@@ -16,8 +16,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class RxRouterAdviceHelper {
 
     private static final Logger log = LoggerFactory.getLogger(RxRouterAdviceHelper.class);
-    private static final Set<Integer> INSTRUMENTED = Collections.newSetFromMap(
-            new ConcurrentHashMap<>());
+    private static final Set<Object> INSTRUMENTED = Collections.synchronizedSet(
+            Collections.newSetFromMap(new IdentityHashMap<>()));
 
     private RxRouterAdviceHelper() {}
 
@@ -27,8 +27,8 @@ public final class RxRouterAdviceHelper {
         }
         Router router = (Router) routerObj;
 
-        // Deduplicate by identity hash — each Router instance is instrumented at most once
-        if (!INSTRUMENTED.add(System.identityHashCode(router))) {
+        // Deduplicate by object identity — each Router instance is instrumented at most once
+        if (!INSTRUMENTED.add(router)) {
             return;
         }
 
