@@ -69,6 +69,20 @@ public final class HttpServerAdviceHelper {
      */
     @SuppressWarnings("unchecked")
     public static Object wrapHandler(Object handler) {
+        try {
+            return doWrapHandler(handler);
+        } catch (Throwable t) {
+            // Log the error that would otherwise be silently suppressed by ByteBuddy's
+            // suppress = Throwable.class on the advice. This is critical for diagnosing
+            // classpath conflicts (e.g., app bundling older OTel semconv).
+            log.warn("HttpServerAdviceHelper: failed to wrap requestHandler — SERVER spans "
+                    + "will NOT be created. Cause: {} ({})", t.getMessage(), t.getClass().getName());
+            return handler;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object doWrapHandler(Object handler) {
         if (handler == null) {
             return null;
         }
