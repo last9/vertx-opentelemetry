@@ -168,6 +168,40 @@ class HttpServerAdviceHelperTest {
         assertThat(testContext.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
     }
 
+    /**
+     * Regression test: apps that bundle an older OTel semconv JAR on their
+     * classpath caused NoSuchFieldError when the helper referenced
+     * SemanticAttributes.HTTP_REQUEST_METHOD (which doesn't exist in older
+     * semconv versions like 1.21.0-alpha).
+     *
+     * <p>This test verifies that HttpServerAdviceHelper's compiled bytecode
+     * has NO references to {@code io.opentelemetry.semconv} classes, ensuring
+     * it works regardless of which semconv version (or none) is on the classpath.
+     */
+    @Test
+    void helperDoesNotReferenceSemanticAttributesClass() throws Exception {
+        // Read the bytecode of HttpServerAdviceHelper and its anonymous inner class
+        // to verify no reference to io.opentelemetry.semconv exists
+        String className = HttpServerAdviceHelper.class.getName().replace('.', '/') + ".class";
+        byte[] bytecode;
+        try (java.io.InputStream is = HttpServerAdviceHelper.class.getClassLoader()
+                .getResourceAsStream(className)) {
+            assertThat(is).as("HttpServerAdviceHelper.class should be loadable").isNotNull();
+            bytecode = is.readAllBytes();
+        }
+
+        // The constant pool in the .class file contains all referenced class names
+        // as UTF-8 strings. If "semconv" or "SemanticAttributes" appears in the
+        // bytecode, the helper still has a compile-time reference to the semconv JAR.
+        String bytecodeAsString = new String(bytecode, java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertThat(bytecodeAsString)
+                .as("HttpServerAdviceHelper must not reference SemanticAttributes "
+                        + "(use string literals instead to avoid classpath conflicts)")
+                .doesNotContain("SemanticAttributes")
+                .doesNotContain("ExceptionAttributes")
+                .doesNotContain("io/opentelemetry/semconv");
+    }
+
     @Test
     void wrapHandlerIsIdempotent() {
         Handler<HttpServerRequest> handler = request -> request.response().end("ok");
