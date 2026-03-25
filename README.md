@@ -1,21 +1,26 @@
 # Vert.x OpenTelemetry Auto-Configure
 
-Zero-code OpenTelemetry instrumentation for Vert.x applications. Add `-javaagent:vertx3-otel-agent.jar` to your JVM args — no code changes, no dependencies, no `TracedRouter` swaps. The agent handles everything.
+Zero-code OpenTelemetry instrumentation for Vert.x applications. Add `-javaagent` to your JVM args — no code changes, no dependencies. The agent handles everything.
 
-| Your Stack | Approach |
-|------------|----------|
-| **Vert.x 3.9+ / RxJava 2** | `-javaagent:vertx3-otel-agent.jar` (zero-code) |
-| Vert.x 4.5+ / RxJava 3 | `TracedRouter.create(vertx)` + env vars |
+| Your Stack | Agent JAR | Approach |
+|------------|-----------|----------|
+| **Vert.x 3.9+ / RxJava 2** | `vertx3-otel-agent.jar` | Zero-code via `-javaagent` |
+| **Vert.x 4.5+ / RxJava 3** | `vertx4-otel-agent.jar` | Zero-code via `-javaagent` |
 
-## Quick Start (Vert.x 3 — zero-code)
+## Quick Start
 
 ### 1. Get the agent
 
 Download from [Releases](https://github.com/last9/vertx-opentelemetry/releases):
 
 ```bash
+# Vert.x 3
 curl -L -o vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.2/vertx3-otel-agent-2.2.2.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.7/vertx3-otel-agent-2.2.3-beta.7.jar
+
+# Vert.x 4
+curl -L -o vertx4-otel-agent.jar \
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.7/vertx4-otel-agent-2.2.3-beta.7.jar
 ```
 
 ### 2. Run your app with the agent
@@ -25,36 +30,43 @@ export OTEL_SERVICE_NAME=my-service
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.last9.io
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <token>"
 
+# Vert.x 3
 java -javaagent:vertx3-otel-agent.jar -jar my-app.jar
+
+# Vert.x 4
+java -javaagent:vertx4-otel-agent.jar -jar my-app.jar
 ```
 
-That's it. Every Router endpoint, JDBC query, Kafka message, Aerospike operation, Redis command, and outbound HTTP call is automatically traced.
+That's it. Every HTTP endpoint, database query, Kafka message, cache operation, and outbound HTTP call is automatically traced.
+
+### What the agent auto-instruments
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  java -javaagent:vertx3-otel-agent.jar -jar my-app.jar  │
-│                                                          │
-│  Agent auto-instruments at bytecode level:               │
-│  ├── Router          → SERVER spans (HTTP routes)        │
-│  ├── WebClient       → CLIENT spans + traceparent        │
-│  ├── JDBCClient      → CLIENT spans (SQL queries)        │
-│  ├── KafkaProducer   → PRODUCER spans                    │
-│  ├── KafkaConsumer   → CONSUMER spans                    │
-│  ├── AerospikeClient → CLIENT spans (cache ops)          │
-│  ├── MySQLPool       → CLIENT spans (reactive SQL)       │
-│  ├── PgPool          → CLIENT spans (reactive SQL)       │
-│  ├── Jedis           → CLIENT spans (Redis)              │
-│  ├── Lettuce         → CLIENT spans (Redis)              │
-│  ├── Netty HTTP      → CLIENT spans (raw HTTP)           │
-│  ├── RESTEasy        → route-pattern extraction          │
-│  └── Raw JDBC        → CLIENT spans (any JDBC driver)    │
-│                                                          │
-│  + RxJava2 context propagation across all operators      │
-│  + W3C traceparent propagation (distributed tracing)     │
-│  + Log-trace correlation (auto-installed into Logback)   │
-│  + JVM metrics (memory, GC, threads, CPU)                │
-│  + Exports via OkHttp OTLP sender (Java 8+ compatible)   │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  java -javaagent:vertx-otel-agent.jar -jar my-app.jar        │
+│                                                              │
+│  Vert.x 3 agent (ByteBuddy)     Vert.x 4 agent (SPI + BB)  │
+│  ├── Router       → SERVER      ├── HTTP server  → SERVER   │
+│  ├── WebClient    → CLIENT      ├── HTTP client  → CLIENT   │
+│  ├── KafkaProducer→ PRODUCER    ├── EventBus     → INTERNAL │
+│  ├── KafkaConsumer→ CONSUMER    ├── SQL client   → CLIENT   │
+│  ├── Netty HTTP   → CLIENT      ├── Redis client → CLIENT   │
+│  ├── MySQLPool    → CLIENT      ├── Kafka        → PROD/CON │
+│  ├── PgPool       → CLIENT      ├── Router names → http.route│
+│  ├── JDBCClient   → CLIENT      └── Micrometer   → metrics  │
+│  ├── Raw JDBC     → CLIENT                                  │
+│  ├── Jedis        → CLIENT      Shared (both agents):       │
+│  ├── Lettuce      → CLIENT      ├── Jedis        → CLIENT   │
+│  ├── Aerospike    → CLIENT      ├── Lettuce      → CLIENT   │
+│  ├── RESTEasy     → http.route  ├── Raw JDBC     → CLIENT   │
+│  └── AWS SQS      → CONSUMER   ├── Aerospike    → CLIENT   │
+│                                  ├── RESTEasy     → http.route│
+│  + RxJava 2/3 context propagation across all operators       │
+│  + W3C traceparent propagation (distributed tracing)         │
+│  + Log-trace correlation (auto-installed into Logback)       │
+│  + JVM metrics (memory, GC, threads, CPU)                    │
+│  + OTel namespace fully shaded — safe with any app classpath │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### 3. Verify traces
@@ -73,7 +85,7 @@ Logback OpenTelemetry appender installed for log export
 
 ## What Gets Auto-Instrumented
 
-### Vert.x 3 (via `-javaagent`)
+### Vert.x 3 (via `-javaagent:vertx3-otel-agent.jar`)
 
 No code changes or `Traced*` wrappers needed. ByteBuddy instruments these at class-load time:
 
@@ -91,23 +103,23 @@ No code changes or `Traced*` wrappers needed. ByteBuddy instruments these at cla
 | **Raw JDBC** (`Statement.execute*`) | CLIENT | `db.system` (auto-detected), `db.name`, `db.statement` |
 | **Netty HTTP client** | CLIENT | `http.method`, `net.peer.name` |
 | **RESTEasy (JAX-RS)** | — | Extracts `@Path` templates → `http.route` |
+| **AWS SQS** (SDK v1 + v2) | CONSUMER | `messaging.system=AmazonSQS`, `messaging.destination.name` |
 
-### Vert.x 4
+### Vert.x 4 (via `-javaagent:vertx4-otel-agent.jar`)
 
-Vert.x 4's `VertxTracer` SPI handles HTTP server/client spans automatically. Add `TracedRouter` for route-pattern span names:
+Also zero-code. The agent injects `TracingOptions` into Vert.x at startup, enabling the native `VertxTracer` SPI:
 
-```java
-import io.last9.tracing.otel.v4.TracedRouter;
-Router router = TracedRouter.create(vertx);  // "GET /v1/users/:id" instead of just "GET"
-```
-
-For database tracing, wrap your pool:
-
-```java
-import io.last9.tracing.otel.v4.TracedDBPool;
-TracedDBPool traced = TracedDBPool.wrap(PgPool.pool(vertx, opts, poolOpts), "postgresql", "mydb");
-traced.query("SELECT * FROM orders").subscribe(rows -> { ... });
-```
+| Component | How it works | What you get |
+|-----------|-------------|-------------|
+| **HTTP server** | VertxTracer SPI (automatic) | SERVER spans for every request |
+| **HTTP client** | VertxTracer SPI (automatic) | CLIENT spans + `traceparent` injection |
+| **EventBus** | VertxTracer SPI (automatic) | INTERNAL spans for send/publish |
+| **SQL client** (PgPool, MySQLPool) | VertxTracer SPI (automatic) | CLIENT spans with SQL statements |
+| **Redis client** | VertxTracer SPI (automatic) | CLIENT spans |
+| **Kafka producer/consumer** | VertxTracer SPI (automatic) | PRODUCER/CONSUMER spans |
+| **Router** | ByteBuddy (SpanNameUpdater) | Route-pattern names: `GET /v1/users/:id` |
+| **Vert.x metrics** | Micrometer → OTel bridge (automatic) | HTTP pools, event bus, event loop lag |
+| **Jedis, Lettuce, JDBC, Aerospike, RESTEasy, SQS** | ByteBuddy (same as v3) | CLIENT spans for third-party libs |
 
 ## Java 8 Support
 
@@ -127,7 +139,7 @@ The agent uses the OkHttp-based OTLP sender (shaded as `io.last9.internal.okhttp
 ```bash
 # Download once (bake into AMI or fetch at startup)
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.2/vertx3-otel-agent-2.2.2.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.7/vertx3-otel-agent-2.2.3-beta.7.jar
 
 # Add to your systemd unit or startup script
 java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar /opt/app/my-app.jar
@@ -144,15 +156,18 @@ CMD ["java", "-javaagent:/app/vertx3-otel-agent.jar", "-jar", "/app/my-app.jar"]
 
 ### How the agent works
 
-The agent uses classloader isolation (like the OTel Java Agent):
+The agent uses classloader isolation and namespace shading:
 
-1. A tiny 2-class shim (`AgentBootstrap`) loads on the system classloader — compiled to Java 8 bytecode for version-check safety
-2. All heavy dependencies (ByteBuddy, OTel SDK, OkHttp) load in an isolated classloader from an embedded JAR (`agent-impl.jar`)
-3. ByteBuddy class transformers intercept Vert.x APIs at load time
-4. RxJava2 context propagation hooks are installed automatically
-5. Log-trace correlation (`MdcTraceTurboFilter` + `OpenTelemetryAppender`) is auto-installed into Logback — no `logback.xml` changes needed
+1. A tiny 2-class shim (`AgentBootstrap`) loads on the system classloader — compiled to Java 8 bytecode
+2. The embedded library JAR (`agent-impl.jar`) is injected onto the system classloader
+3. All OTel SDK, ByteBuddy, and OkHttp classes are shaded under `io.last9.internal.*` — **safe even if your app bundles its own OTel SDK**
+4. ByteBuddy class transformers intercept Vert.x APIs at load time
+5. RxJava context propagation hooks are installed automatically
+6. Log-trace correlation is auto-installed into Logback — no `logback.xml` changes needed
 
 **No Maven dependency required.** The agent is fully self-contained. Your app doesn't need any `io.last9` dependency in `pom.xml`.
+
+**Safe with existing OTel dependencies.** The agent's OTel SDK is fully isolated under `io.last9.internal.otel.*`. If your app already bundles `opentelemetry-api`, `opentelemetry-sdk`, or `opentelemetry-semconv` — no conflict. The agent ignores the app's OTel classes entirely.
 
 ## Configuration
 
@@ -202,10 +217,10 @@ All standard [OpenTelemetry environment variables](https://opentelemetry.io/docs
 
 If outgoing calls show as separate root traces:
 
-1. **Check the agent loaded** — look for `Vertx3Instrumenter: bytecode instrumentation installed` in logs
-2. **Check RxJava context propagation** — look for `RxJava2 OpenTelemetry context propagation hooks installed`
+1. **Check the agent loaded** — look for `bytecode instrumentation installed` in logs
+2. **Check RxJava context propagation** — look for `RxJava context propagation installed`
 3. **Check downstream reads `traceparent`** — the downstream service must be OTel-instrumented
-4. **Verify `rxSend()` runs inside a handler** — trace context is only available within a Router handler chain. Calls from timers or EventBus consumers need their own span context.
+4. **Verify `rxSend()` runs inside a handler** — trace context is only available within a Router handler chain
 
 ### No Spans Exported
 
@@ -213,6 +228,13 @@ If outgoing calls show as separate root traces:
 2. Check `OTEL_EXPORTER_OTLP_HEADERS` has correct auth
 3. Look for `Connection refused` errors in stderr (OkHttp sender logs export failures)
 4. Set `OTEL_LOG_LEVEL=debug` for verbose export logging
+
+### Missing SERVER Spans (CLIENT spans present)
+
+If CLIENT spans (database, HTTP client) flow but SERVER spans don't:
+
+1. **Check transformation logs** — look for `transformed io.vertx.reactivex.ext.web.Router (loaded=false)` and `HttpServerAdviceHelper: wrapping requestHandler`
+2. **If `HttpServerAdviceHelper` log is missing** — the helper failed to load. Check for `failed to wrap requestHandler` WARN message. Common cause: app bundles conflicting OTel classes. Upgrade to v2.2.3-beta.7+ which shades the OTel namespace.
 
 ## Why Not the OTel Java Agent?
 
@@ -226,12 +248,7 @@ This library works *with* Vert.x's context model — using handler-based instrum
 
 ## Pre-release / Beta Builds
 
-Every push and PR builds JARs as GitHub Actions artifacts. Go to [Actions](https://github.com/last9/vertx-opentelemetry/actions/workflows/ci.yaml), click a run, and download the `jars-<sha>` artifact. Install locally:
-
-```bash
-mvn install:install-file -Dfile=vertx3-otel-agent-<version>.jar \
-  -DgroupId=io.last9 -DartifactId=vertx3-otel-agent -Dversion=<version> -Dpackaging=jar
-```
+Every push and PR builds JARs as GitHub Actions artifacts. Go to [Actions](https://github.com/last9/vertx-opentelemetry/actions/workflows/ci.yaml), click a run, and download the `jars-<sha>` artifact.
 
 Tagged pre-releases appear on the [Releases](https://github.com/last9/vertx-opentelemetry/releases) page with downloadable JARs.
 
@@ -239,136 +256,68 @@ Tagged pre-releases appear on the [Releases](https://github.com/last9/vertx-open
 
 | Module | Java | Vert.x | RxJava |
 |--------|------|--------|--------|
-| `vertx3-otel-agent` (agent JAR) | **8+** | 3.9+ | 2.x |
-| `vertx4-rxjava3-otel-autoconfigure` | 11+ | 4.5+ | 3.x |
-| `vertx3-rxjava2-otel-autoconfigure` | 11+ | 3.9+ | 2.x |
+| `vertx3-otel-agent` | **8+** | 3.9+ | 2.x |
+| `vertx4-otel-agent` | **11+** | 4.5+ | 3.x |
+| `vertx3-rxjava2-otel-autoconfigure` (library) | 11+ | 3.9+ | 2.x |
+| `vertx4-rxjava3-otel-autoconfigure` (library) | 11+ | 4.5+ | 3.x |
 
-The standalone agent works on both **JDK and JRE** with full classloader isolation.
+Both standalone agents work on **JDK and JRE** with full classloader isolation.
 
 ---
 
 <details>
-<summary><h2>Vert.x 4: TracedRouter + TracedDBPool</h2></summary>
+<summary><h2>Library Mode: Manual Traced* Wrappers</h2></summary>
 
-Vert.x 4's `VertxTracer` SPI handles HTTP server/client spans and Kafka producer/consumer automatically. You need `TracedRouter` for route-pattern names and `TracedDBPool` for database spans.
+> **Prefer the `-javaagent` approach.** Library mode is for environments where `-javaagent` is not feasible.
 
-### Add the dependency
+### Vert.x 4
 
 ```xml
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>2.2.2</version>
+    <version>2.2.3-beta.7</version>
 </dependency>
 ```
 
-### TracedRouter
-
 ```java
+// Use OtelLauncher as main class
+// <mainClass>io.last9.tracing.otel.v4.OtelLauncher</mainClass>
+
+// TracedRouter for route-pattern span names
 import io.last9.tracing.otel.v4.TracedRouter;
 Router router = TracedRouter.create(vertx);
-```
 
-### TracedDBPool
-
-```java
+// TracedDBPool for database spans
 import io.last9.tracing.otel.v4.TracedDBPool;
-
-// PostgreSQL
 TracedDBPool traced = TracedDBPool.wrap(PgPool.pool(vertx, opts, poolOpts), "postgresql", "mydb");
-traced.query("SELECT * FROM orders").subscribe(rows -> { ... });
-traced.preparedQuery("SELECT * FROM orders WHERE id = $1", Tuple.of(42)).subscribe(...);
 
-// MySQL
-TracedDBPool mysql = TracedDBPool.wrap(MySQLPool.pool(vertx, opts, poolOpts), "mysql", "mydb");
-```
-
-### Kafka batch consumer
-
-```java
+// Kafka batch consumer
 import io.last9.tracing.otel.v4.KafkaTracing;
 consumer.batchHandler(KafkaTracing.tracedBatchHandler(topicName, this::handleBatch));
 ```
 
-### Metrics
-
-`OtelLauncher` automatically configures a Micrometer → OpenTelemetry bridge for Vert.x internal metrics (HTTP pools, event bus, event loop lag). Set `OTEL_METRICS_EXPORTER=otlp` to export.
-
-</details>
-
-<details>
-<summary><h2>Legacy: Manual Traced* Wrappers (Vert.x 3)</h2></summary>
-
-> **Prefer the `-javaagent` approach.** Manual wrappers are for environments where `-javaagent` is not feasible.
-
-### Add the dependency
+### Vert.x 3
 
 ```xml
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>2.2.2</version>
+    <version>2.2.3-beta.7</version>
 </dependency>
 ```
 
-### OtelLauncher (alternative to `-javaagent`)
-
-Set as your main class — it self-attaches ByteBuddy before deploying verticles. Requires a **JDK** runtime (not JRE).
-
-```xml
-<mainClass>io.last9.tracing.otel.v3.OtelLauncher</mainClass>
-```
-
-If both `-javaagent` and OtelLauncher are used, OtelLauncher detects the agent already ran and becomes a no-op.
-
-### Manual wrapper APIs
-
-For environments where neither `-javaagent` nor `OtelLauncher` is feasible:
-
 ```java
-// Router
-import io.last9.tracing.otel.v3.TracedRouter;
+// OtelLauncher (alternative to -javaagent, requires JDK)
+// <mainClass>io.last9.tracing.otel.v3.OtelLauncher</mainClass>
+
+// Manual wrapper APIs
 Router router = TracedRouter.create(vertx);
-
-// WebClient
-import io.last9.tracing.otel.v3.TracedWebClient;
 WebClient client = TracedWebClient.create(vertx);
-
-// SQL (legacy SQLClient)
-import io.last9.tracing.otel.v3.TracedSQLClient;
-SQLClient client = TracedSQLClient.wrap(JDBCClient.createShared(vertx, config), "mysql", "mydb");
-
-// MySQL (reactive)
-import io.last9.tracing.otel.v3.TracedMySQLClient;
-TracedMySQLClient mysql = TracedMySQLClient.wrap(MySQLPool.pool(vertx, opts, poolOpts), "mydb");
-
-// Redis
-import io.last9.tracing.otel.v3.TracedRedisClient;
-RedisAPI redis = TracedRedisClient.wrap(RedisAPI.api(connection), "0");
-
-// Aerospike
-import io.last9.tracing.otel.v3.TracedAerospikeClient;
-TracedAerospikeClient client = TracedAerospikeClient.wrap(new AerospikeClient("localhost", 3000), "ns");
-
-// Kafka Producer
-import io.last9.tracing.otel.v3.TracedKafkaProducer;
+SQLClient sql = TracedSQLClient.wrap(JDBCClient.createShared(vertx, config), "mysql", "mydb");
+TracedAerospikeClient aero = TracedAerospikeClient.wrap(new AerospikeClient("localhost", 3000), "ns");
 TracedKafkaProducer<String, String> producer = TracedKafkaProducer.wrap(KafkaProducer.create(vertx, config));
-
-// Kafka Consumer
-import io.last9.tracing.otel.v3.TracedKafkaConsumer;
 TracedKafkaConsumer.create(vertx, config, "topic", "group", records -> { ... });
-
-// Worker thread context propagation
-import io.last9.tracing.otel.v3.TracedVertx;
-TracedVertx.<Record>rxExecuteBlocking(vertx, promise -> { ... });
-
-// Generic RxJava2 client wrapping
-import io.last9.tracing.otel.v3.TracedRxClient;
-MyClient traced = TracedRxClient.wrap(client, MyClient.class, "mysql", "mydb");
-
-// Per-request HTTP tracing
-import io.last9.tracing.otel.v3.ClientTracing;
-ClientTracing.traced(webClient.getAbs(url)).rxSend().subscribe(...);
 ```
 
 ### Manual SDK initialization
@@ -377,7 +326,7 @@ If using a custom main class (not OtelLauncher):
 
 ```java
 import io.last9.tracing.otel.OtelSdkSetup;
-import io.last9.tracing.otel.v3.RxJava2ContextPropagation;
+import io.last9.tracing.otel.v3.RxJava2ContextPropagation; // or v4.RxJava3ContextPropagation
 
 OtelSdkSetup.initialize();
 RxJava2ContextPropagation.install();
