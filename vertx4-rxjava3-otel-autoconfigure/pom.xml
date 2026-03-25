@@ -97,6 +97,27 @@
             <version>${opentelemetry-instrumentation.version}-alpha</version>
         </dependency>
 
+        <!-- ByteBuddy: bytecode instrumentation for zero-code tracing
+             (intercepts VertxBuilder.init() and Router.router() at class-load time) -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+        </dependency>
+        <!-- ByteBuddy Agent: self-attach for OtelLauncher (no -javaagent needed) -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy-agent</artifactId>
+        </dependency>
+
+        <!-- Aerospike client — provided scope for AerospikeClientAdvice compile.
+             App provides the actual client at runtime. -->
+        <dependency>
+            <groupId>com.aerospike</groupId>
+            <artifactId>aerospike-client</artifactId>
+            <version>${aerospike-client.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Logback (provided via core, needed at test time for MdcTraceTurboFilter tests) -->
         <dependency>
             <groupId>ch.qos.logback</groupId>

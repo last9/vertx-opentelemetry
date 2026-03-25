@@ -43,6 +43,7 @@
         <module>vertx4-rxjava3-otel-autoconfigure</module>
         <module>vertx3-rxjava2-otel-autoconfigure</module>
         <module>vertx3-otel-agent</module>
+        <module>vertx4-otel-agent</module>
     </modules>
 
     <properties>
@@ -351,6 +352,12 @@
                                              must be visible to Vert.x's setMetricsOptions() check.
                                              v3 module does not depend on these; shade silently skips
                                              artifacts not present in a module's dependency graph. -->
+                                        <!-- Vert.x OpenTelemetry integration: provides VertxTracer SPI.
+                                             Only used in the v4 fat JAR; shade silently skips
+                                             artifacts not present in a module's dependency graph.
+                                             NOT relocated — OpenTelemetryOptions type identity
+                                             must be visible to Vert.x's setTracingOptions() check. -->
+                                        <include>io.vertx:vertx-opentelemetry</include>
                                         <include>io.vertx:vertx-micrometer-metrics</include>
                                         <include>io.micrometer:micrometer-core</include>
                                         <include>io.micrometer:micrometer-commons</include>
