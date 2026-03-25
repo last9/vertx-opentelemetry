@@ -1,6 +1,7 @@
 package io.last9.tracing.otel.v3.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
@@ -10,7 +11,6 @@ import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
-import io.opentelemetry.semconv.SemanticAttributes;
 import io.vertx.core.Handler;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
@@ -115,15 +115,15 @@ public final class HttpServerAdviceHelper {
                 Span span = tracer.spanBuilder(method + " " + path)
                         .setParent(parentContext)
                         .setSpanKind(SpanKind.SERVER)
-                        .setAttribute(SemanticAttributes.HTTP_REQUEST_METHOD, method)
-                        .setAttribute(SemanticAttributes.URL_PATH, path)
-                        .setAttribute(SemanticAttributes.URL_SCHEME,
+                        .setAttribute("http.request.method", method)
+                        .setAttribute("url.path", path)
+                        .setAttribute("url.scheme",
                                 request.isSSL() ? "https" : "http")
-                        .setAttribute(SemanticAttributes.SERVER_ADDRESS, serverAddr)
+                        .setAttribute("server.address", serverAddr)
                         .startSpan();
 
                 if (serverPort > 0) {
-                    span.setAttribute(SemanticAttributes.SERVER_PORT, serverPort);
+                    span.setAttribute(AttributeKey.longKey("server.port"), serverPort);
                 }
 
                 // Set response attributes and end span when body is fully sent.
@@ -133,7 +133,7 @@ public final class HttpServerAdviceHelper {
                 HttpServerResponse response = request.response();
                 response.headersEndHandler(v -> {
                     int statusCode = response.getStatusCode();
-                    span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, (long) statusCode);
+                    span.setAttribute(AttributeKey.longKey("http.response.status_code"), (long) statusCode);
                     if (statusCode >= 500) {
                         span.setStatus(StatusCode.ERROR);
                     }

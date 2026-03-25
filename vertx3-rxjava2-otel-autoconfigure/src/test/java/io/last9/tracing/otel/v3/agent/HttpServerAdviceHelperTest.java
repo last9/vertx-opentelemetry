@@ -126,14 +126,16 @@ class HttpServerAdviceHelperTest {
                                     .orElseThrow(() -> new AssertionError("No SERVER span found"));
 
                             assertThat(span.getName()).isEqualTo("GET /api/users/42");
+                            // Verify attributes use string keys (not SemanticAttributes constants)
+                            // to avoid classpath conflicts when apps bundle older OTel semconv
                             assertThat(span.getAttributes().get(
-                                    io.opentelemetry.semconv.SemanticAttributes.HTTP_REQUEST_METHOD))
+                                    io.opentelemetry.api.common.AttributeKey.stringKey("http.request.method")))
                                     .isEqualTo("GET");
                             assertThat(span.getAttributes().get(
-                                    io.opentelemetry.semconv.SemanticAttributes.URL_PATH))
+                                    io.opentelemetry.api.common.AttributeKey.stringKey("url.path")))
                                     .isEqualTo("/api/users/42");
                             assertThat(span.getAttributes().get(
-                                    io.opentelemetry.semconv.SemanticAttributes.HTTP_RESPONSE_STATUS_CODE))
+                                    io.opentelemetry.api.common.AttributeKey.longKey("http.response.status_code")))
                                     .isEqualTo(200L);
                             testContext.completeNow();
                         }),
@@ -157,7 +159,7 @@ class HttpServerAdviceHelperTest {
                                     .orElseThrow(() -> new AssertionError("No SERVER span found"));
 
                             assertThat(span.getAttributes().get(
-                                    io.opentelemetry.semconv.SemanticAttributes.HTTP_RESPONSE_STATUS_CODE))
+                                    io.opentelemetry.api.common.AttributeKey.longKey("http.response.status_code")))
                                     .isEqualTo(404L);
                             testContext.completeNow();
                         }),

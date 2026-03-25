@@ -1,14 +1,14 @@
 package io.last9.tracing.otel.v4.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 
 /**
  * Helper methods called by {@link JdbcStatementAdvice} to create CLIENT spans
@@ -44,12 +44,12 @@ public final class JdbcStatementHelper {
 
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
-                .setAttribute(SemanticAttributes.DB_SYSTEM, dbSystem != null ? dbSystem : "other_sql")
-                .setAttribute(SemanticAttributes.DB_STATEMENT, sql)
+                .setAttribute("db.system", dbSystem != null ? dbSystem : "other_sql")
+                .setAttribute("db.statement", sql)
                 .startSpan();
 
         if (dbName != null) {
-            span.setAttribute(SemanticAttributes.DB_NAME, dbName);
+            span.setAttribute("db.name", dbName);
         }
 
         return span;
@@ -115,7 +115,7 @@ public final class JdbcStatementHelper {
         try {
             if (thrown != null) {
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             }
         } finally {

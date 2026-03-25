@@ -2,14 +2,14 @@ package io.last9.tracing.otel.v4.agent;
 
 import com.aerospike.client.Key;
 import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 
 /**
  * Helper methods called by {@link AerospikeClientAdvice} to create CLIENT spans
@@ -62,12 +62,12 @@ public final class AerospikeClientHelper {
 
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
-                .setAttribute(SemanticAttributes.DB_SYSTEM, "aerospike")
-                .setAttribute(SemanticAttributes.DB_STATEMENT, operation)
+                .setAttribute("db.system", "aerospike")
+                .setAttribute("db.statement", operation)
                 .startSpan();
 
         if (dbNamespace != null) {
-            span.setAttribute(SemanticAttributes.DB_NAME, dbNamespace);
+            span.setAttribute("db.name", dbNamespace);
         }
 
         return span;
@@ -89,12 +89,12 @@ public final class AerospikeClientHelper {
 
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
-                .setAttribute(SemanticAttributes.DB_SYSTEM, "aerospike")
-                .setAttribute(SemanticAttributes.DB_STATEMENT, operation)
+                .setAttribute("db.system", "aerospike")
+                .setAttribute("db.statement", operation)
                 .startSpan();
 
         if (dbNamespace != null) {
-            span.setAttribute(SemanticAttributes.DB_NAME, dbNamespace);
+            span.setAttribute("db.name", dbNamespace);
         }
 
         return span;
@@ -108,7 +108,7 @@ public final class AerospikeClientHelper {
         try {
             if (thrown != null) {
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             }
         } finally {

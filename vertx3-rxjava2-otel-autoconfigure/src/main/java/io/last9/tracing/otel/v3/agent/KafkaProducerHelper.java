@@ -2,14 +2,14 @@ package io.last9.tracing.otel.v3.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -46,24 +46,24 @@ public final class KafkaProducerHelper {
 
         Span span = tracer.spanBuilder(record.topic() + " publish")
                 .setSpanKind(SpanKind.PRODUCER)
-                .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
-                .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, record.topic())
-                .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
-                        SemanticAttributes.MessagingOperationValues.PUBLISH)
+                .setAttribute("messaging.system", "kafka")
+                .setAttribute("messaging.destination.name", record.topic())
+                .setAttribute("messaging.operation",
+                        "publish")
                 .setAttribute("peer.service", "kafka")
                 .startSpan();
 
         if (record.key() != null) {
-            span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_KEY,
+            span.setAttribute("messaging.kafka.message.key",
                     String.valueOf(record.key()));
         }
 
         if (record.value() == null) {
-            span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_TOMBSTONE, true);
+            span.setAttribute("messaging.kafka.message.tombstone", true);
         }
 
         if (record.partition() != null) {
-            span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
+            span.setAttribute("messaging.kafka.destination.partition",
                     (long) record.partition());
         }
 
@@ -88,12 +88,12 @@ public final class KafkaProducerHelper {
             try {
                 if (exception != null) {
                     span.recordException(exception,
-                            Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                            Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                     span.setStatus(StatusCode.ERROR, exception.getMessage());
                 } else if (metadata != null) {
-                    span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
+                    span.setAttribute("messaging.kafka.destination.partition",
                             (long) metadata.partition());
-                    span.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_OFFSET,
+                    span.setAttribute("messaging.kafka.message.offset",
                             metadata.offset());
                 }
             } finally {
@@ -111,7 +111,7 @@ public final class KafkaProducerHelper {
     public static void endWithError(Span span, Throwable thrown) {
         if (span == null) return;
         span.recordException(thrown,
-                Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
         span.setStatus(StatusCode.ERROR, thrown.getMessage());
         span.end();
     }

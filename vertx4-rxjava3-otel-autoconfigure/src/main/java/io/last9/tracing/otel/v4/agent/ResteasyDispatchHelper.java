@@ -2,6 +2,7 @@ package io.last9.tracing.otel.v4.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
@@ -11,8 +12,7 @@ import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
@@ -107,8 +107,8 @@ public final class ResteasyDispatchHelper {
             Span span = tracer.spanBuilder(method + " " + path)
                     .setParent(parentContext)
                     .setSpanKind(SpanKind.SERVER)
-                    .setAttribute(SemanticAttributes.HTTP_REQUEST_METHOD, method)
-                    .setAttribute(SemanticAttributes.URL_PATH, path)
+                    .setAttribute("http.request.method", method)
+                    .setAttribute("url.path", path)
                     .startSpan();
 
             // Extract additional HTTP semantic attributes from the request URI
@@ -117,16 +117,16 @@ public final class ResteasyDispatchHelper {
                 if (requestUri instanceof URI) {
                     URI uri = (URI) requestUri;
                     if (uri.getScheme() != null) {
-                        span.setAttribute(SemanticAttributes.URL_SCHEME, uri.getScheme());
+                        span.setAttribute("url.scheme", uri.getScheme());
                     }
                     if (uri.getHost() != null) {
-                        span.setAttribute(SemanticAttributes.SERVER_ADDRESS, uri.getHost());
+                        span.setAttribute("server.address", uri.getHost());
                     }
                     if (uri.getPort() > 0) {
-                        span.setAttribute(SemanticAttributes.SERVER_PORT, (long) uri.getPort());
+                        span.setAttribute("server.port", (long) uri.getPort());
                     }
                     if (uri.getQuery() != null) {
-                        span.setAttribute(SemanticAttributes.URL_QUERY, uri.getQuery());
+                        span.setAttribute("url.query", uri.getQuery());
                     }
                 }
             } catch (Exception ignored) {
@@ -139,7 +139,7 @@ public final class ResteasyDispatchHelper {
                 String userAgent = (String) headers.getClass()
                         .getMethod("getHeaderString", String.class).invoke(headers, "User-Agent");
                 if (userAgent != null) {
-                    span.setAttribute(SemanticAttributes.USER_AGENT_ORIGINAL, userAgent);
+                    span.setAttribute("user_agent.original", userAgent);
                 }
             } catch (Exception ignored) {}
 
@@ -168,7 +168,7 @@ public final class ResteasyDispatchHelper {
         try {
             if (thrown != null) {
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             }
 
@@ -177,7 +177,7 @@ public final class ResteasyDispatchHelper {
                     Object statusObj = responseObj.getClass()
                             .getMethod("getStatus").invoke(responseObj);
                     int status = (int) statusObj;
-                    span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, (long) status);
+                    span.setAttribute("http.response.status_code", (long) status);
                     if (status >= 500) {
                         span.setStatus(StatusCode.ERROR);
                     }
@@ -190,7 +190,7 @@ public final class ResteasyDispatchHelper {
             if (requestObj != null) {
                 String route = extractJaxRsRoute(requestObj);
                 if (route != null) {
-                    span.setAttribute(SemanticAttributes.HTTP_ROUTE, route);
+                    span.setAttribute("http.route", route);
                     // Update span name to use route template instead of literal path
                     String method = null;
                     try {
