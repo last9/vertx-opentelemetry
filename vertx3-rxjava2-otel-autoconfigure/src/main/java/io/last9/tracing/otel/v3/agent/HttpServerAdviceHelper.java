@@ -165,11 +165,26 @@ public final class HttpServerAdviceHelper {
             @Override
             public void handle(HttpServerRequest request) {
 
+                // Check if Netty-level instrumentation already created a SERVER span.
+                // If so, adopt it (manage scope only) — don't create a duplicate.
+                Span nettySpan = NettyServerTracingHandler.NETTY_SERVER_SPAN.get();
+                if (nettySpan != null && nettySpan.getSpanContext().isValid()) {
+                    NettyServerTracingHandler.NETTY_SERVER_SPAN.remove();
+                    // Enrich the Netty span with Vert.x-level attributes
+                    nettySpan.setAttribute("url.scheme", request.isSSL() ? "https" : "http");
+                    // Make Netty span current within this handler scope, then delegate.
+                    // Netty handler manages span lifecycle (end on response write).
+                    Context otelContext = Context.root().with(nettySpan);
+                    try (Scope ignored = otelContext.makeCurrent()) {
+                        original.handle(request);
+                    }
+                    return;
+                }
+
+                // No Netty span — create our own SERVER span (original path).
                 String method = request.method().name();
                 String path = request.path();
 
-                // Extract parent context from incoming traceparent header.
-                // Use Context.root() to avoid inheriting stale spans from the event loop thread.
                 Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
 
                 // Parse host header for server.address and server.port
@@ -225,9 +240,6 @@ public final class HttpServerAdviceHelper {
 
                 // Make span current, delegate to original handler, then close scope.
                 // CRITICAL: scope must close when handle() returns — NOT in bodyEndHandler.
-                // Vert.x runs all requests on a single event loop thread. If the scope
-                // stays open after handle() returns, the next request on the same thread
-                // inherits a stale scope, causing context confusion and orphan spans.
                 Context otelContext = parentContext.with(span);
                 try (Scope ignored = otelContext.makeCurrent()) {
                     original.handle(request);

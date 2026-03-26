@@ -133,9 +133,14 @@ public final class Vertx3Instrumenter {
 
         log.info("Vertx3Instrumenter: bytecode instrumentation installed (Router, WebClient)");
 
+        // Netty pipeline: inject tracing handler when HttpServerCodec is added.
+        // Creates SERVER spans at the lowest possible level (Netty), matching the approach
+        // used by Datadog and OTel Java agents. Works even if requestHandler() is never called.
+        installNettyServerPipelineInstrumentation(inst, listener);
+
         // HttpServer.requestHandler() — creates SERVER spans for ALL incoming HTTP requests,
-        // regardless of whether a Router is used. This is critical for apps that use custom
-        // dispatchers or custom frameworks that don't route through Router.
+        // regardless of whether a Router is used. If the Netty handler already created a span,
+        // HttpServerAdviceHelper adopts it (manages scope only, no duplicate).
         installHttpServerInstrumentation(inst, listener);
 
         // --- Raw client library instrumentation ---
@@ -625,6 +630,35 @@ public final class Vertx3Instrumenter {
         } catch (Throwable t) {
             log.warn("Vertx3Instrumenter: AWS SQS SDK v2 instrumentation skipped — "
                     + "sqs SDK v2 not on classpath: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * Netty pipeline: intercept {@code DefaultChannelPipeline.addLast(String, ChannelHandler)}
+     * to inject {@link NettyServerTracingHandler} when {@code HttpServerCodec} is added.
+     *
+     * <p>This creates SERVER spans at the Netty level — the same approach used by Datadog
+     * and OTel Java agents. It serves as a safety net: even if
+     * {@code HttpServerImpl.requestHandler()} instrumentation fails (e.g., classpath conflict),
+     * the Netty handler still produces SERVER spans.
+     */
+    private static void installNettyServerPipelineInstrumentation(Instrumentation inst,
+                                                                    AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.netty.channel.DefaultChannelPipeline"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(NettyServerPipelineAdvice.class)
+                                    .on(named("addLast")
+                                            .and(takesArguments(2))
+                                            .and(takesArgument(0, String.class)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Netty pipeline instrumentation installed (SERVER spans via Netty)");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: Netty pipeline instrumentation skipped: {}", t.getMessage());
         }
     }
 }
