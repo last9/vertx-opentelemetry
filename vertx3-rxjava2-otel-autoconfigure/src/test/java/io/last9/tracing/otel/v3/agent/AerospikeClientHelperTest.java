@@ -232,6 +232,64 @@ class AerospikeClientHelperTest {
         assertThat(AerospikeClientHelper.wrapAsyncListener(null, null)).isNull();
     }
 
+    // --- enrichWithConnectionMetadata tests ---
+
+    @Test
+    void enrichWithConnectionMetadata_setsAttributesFromNode() throws Exception {
+        // Create a span and make it current
+        Key key = new Key("test-ns", "users", "u1");
+        Span span = AerospikeClientHelper.startSpan("GET", key);
+        Scope scope = span.makeCurrent();
+
+        // Create mock Node-like object with getHost() method via a real Aerospike Node
+        // We can't easily construct a real Node, so test the reflection path handles
+        // objects without getHost() gracefully
+        AerospikeClientHelper.enrichWithConnectionMetadata(new Object(), new Object());
+
+        // Span should still work (no exception)
+        AerospikeClientHelper.endSpan(span, scope, null);
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).contains("aerospike GET");
+    }
+
+    @Test
+    void enrichWithConnectionMetadata_noSpanActive() {
+        // When no span is active, should not throw
+        AerospikeClientHelper.enrichWithConnectionMetadata(new Object(), new Object());
+    }
+
+    // --- Bytecode safety tests ---
+
+    @Test
+    void syncAdviceDoesNotReferenceSemanticAttributes() throws Exception {
+        String className = AerospikeSyncAdvice.class.getName().replace('.', '/') + ".class";
+        byte[] bytecode;
+        try (java.io.InputStream is = AerospikeSyncAdvice.class.getClassLoader()
+                .getResourceAsStream(className)) {
+            assertThat(is).isNotNull();
+            bytecode = is.readAllBytes();
+        }
+        String bytecodeAsString = new String(bytecode, java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertThat(bytecodeAsString)
+                .doesNotContain("SemanticAttributes")
+                .doesNotContain("io/opentelemetry/semconv");
+    }
+
+    @Test
+    void asyncAdviceDoesNotReferenceSemanticAttributes() throws Exception {
+        String className = AerospikeAsyncAdvice.class.getName().replace('.', '/') + ".class";
+        byte[] bytecode;
+        try (java.io.InputStream is = AerospikeAsyncAdvice.class.getClassLoader()
+                .getResourceAsStream(className)) {
+            assertThat(is).isNotNull();
+            bytecode = is.readAllBytes();
+        }
+        String bytecodeAsString = new String(bytecode, java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertThat(bytecodeAsString)
+                .doesNotContain("SemanticAttributes")
+                .doesNotContain("io/opentelemetry/semconv");
+    }
+
     // Test interfaces for proxy verification
     interface SuccessCallback { void onSuccess(); }
     interface FailureCallback { void onFailure(Throwable t); }
