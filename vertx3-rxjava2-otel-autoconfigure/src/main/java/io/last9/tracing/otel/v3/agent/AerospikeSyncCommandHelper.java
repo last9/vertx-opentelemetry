@@ -62,7 +62,10 @@ public final class AerospikeSyncCommandHelper {
      * Returns null if already inside a traced call or if extraction fails.
      */
     public static Span startSpan(Object command) {
-        // Guard check delegated to AerospikeClientHelper.startSpan()
+        // Fast-path: skip string work if already inside a traced Aerospike call
+        if (AgentGuard.IN_DB_TRACED_CALL.get() || AerospikeClientHelper.IN_AEROSPIKE_CALL.get()) {
+            return null;
+        }
         String className = command.getClass().getSimpleName();
         String operation = COMMAND_TO_OP.get(className);
         if (operation == null) {

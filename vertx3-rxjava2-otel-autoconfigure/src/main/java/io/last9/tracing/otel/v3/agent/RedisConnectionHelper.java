@@ -1,14 +1,13 @@
 package io.last9.tracing.otel.v3.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
 import io.vertx.redis.client.Command;
 import io.vertx.redis.client.Request;
 
@@ -48,8 +47,8 @@ public final class RedisConnectionHelper {
 
         return tracer.spanBuilder("redis " + commandName)
                 .setSpanKind(SpanKind.CLIENT)
-                .setAttribute(SemanticAttributes.DB_SYSTEM, "redis")
-                .setAttribute(SemanticAttributes.DB_STATEMENT, commandName)
+                .setAttribute("db.system", "redis")
+                .setAttribute("db.statement", commandName)
                 .startSpan();
     }
 
@@ -61,7 +60,7 @@ public final class RedisConnectionHelper {
         try {
             if (thrown != null) {
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             }
         } finally {

@@ -6,7 +6,7 @@
 
     <groupId>io.last9</groupId>
     <artifactId>vertx-otel-autoconfigure</artifactId>
-    <version>2.2.3-beta.3</version>
+    <version>2.2.3-beta.11</version>
     <packaging>pom</packaging>
 
     <name>Vert.x OpenTelemetry Auto-Configure</name>
@@ -43,6 +43,7 @@
         <module>vertx4-rxjava3-otel-autoconfigure</module>
         <module>vertx3-rxjava2-otel-autoconfigure</module>
         <module>vertx3-otel-agent</module>
+        <module>vertx4-otel-agent</module>
     </modules>
 
     <properties>
@@ -351,6 +352,12 @@
                                              must be visible to Vert.x's setMetricsOptions() check.
                                              v3 module does not depend on these; shade silently skips
                                              artifacts not present in a module's dependency graph. -->
+                                        <!-- Vert.x OpenTelemetry integration: provides VertxTracer SPI.
+                                             Only used in the v4 fat JAR; shade silently skips
+                                             artifacts not present in a module's dependency graph.
+                                             NOT relocated — OpenTelemetryOptions type identity
+                                             must be visible to Vert.x's setTracingOptions() check. -->
+                                        <include>io.vertx:vertx-opentelemetry</include>
                                         <include>io.vertx:vertx-micrometer-metrics</include>
                                         <include>io.micrometer:micrometer-core</include>
                                         <include>io.micrometer:micrometer-commons</include>
@@ -388,6 +395,22 @@
                                     <relocation>
                                         <pattern>kotlin</pattern>
                                         <shadedPattern>io.last9.internal.kotlin</shadedPattern>
+                                    </relocation>
+                                    <!-- Relocate the entire OpenTelemetry namespace to avoid
+                                         classpath conflicts when apps bundle their own OTel SDK,
+                                         API, semconv, or instrumentation API. Without this,
+                                         the app's OTel classes load first (appendToSystemCL puts
+                                         ours last) and may be incompatible — causing silent
+                                         NoClassDefFoundError/NoSuchFieldError in agent helpers.
+                                         This makes the agent immune to ANY OTel version on the
+                                         app classpath, matching the Datadog agent's isolation model.
+                                         Note: vertx-opentelemetry and vertx-micrometer-metrics
+                                         are NOT relocated at the package level (Vert.x SPI loads
+                                         them by class name), but their internal OTel references
+                                         ARE rewritten to the relocated namespace. -->
+                                    <relocation>
+                                        <pattern>io.opentelemetry</pattern>
+                                        <shadedPattern>io.last9.internal.otel</shadedPattern>
                                     </relocation>
                                 </relocations>
                                 <transformers>

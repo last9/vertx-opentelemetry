@@ -1,0 +1,128 @@
+package io.last9.tracing.otel.v4.agent;
+
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+
+
+/**
+ * Helper methods called by {@link JdbcStatementAdvice} to create CLIENT spans
+ * for raw JDBC Statement operations.
+ *
+ * <p>Covers any JDBC driver (MySQL, PostgreSQL, H2, Oracle, etc.) by intercepting
+ * at the {@code java.sql.Statement} interface level. Extracts the database name
+ * from the Statement's connection metadata when possible.
+ *
+ * <p>Uses the shared {@link AgentGuard} ThreadLocal to prevent double spans when
+ * also using Vert.x JDBC instrumentation or TracedSQLClient.
+ */
+public final class JdbcStatementHelper {
+
+    private static final String TRACER_NAME = "io.last9.tracing.otel.v4";
+
+    private JdbcStatementHelper() {}
+
+    /**
+     * Starts a CLIENT span for the given SQL operation on a raw JDBC Statement.
+     * Returns null if already inside a traced call (idempotency guard).
+     */
+    public static Span startSpan(String sql, Object statement) {
+        if (AgentGuard.IN_DB_TRACED_CALL.get()) {
+            return null;
+        }
+
+        Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
+
+        String dbSystem = extractDbSystem(statement);
+        String dbName = extractDbName(statement);
+        String spanName = io.last9.tracing.otel.v4.SqlSpanName.fromSql(sql, dbName);
+
+        Span span = tracer.spanBuilder(spanName)
+                .setSpanKind(SpanKind.CLIENT)
+                .setAttribute("db.system", dbSystem != null ? dbSystem : "other_sql")
+                .setAttribute("db.statement", sql)
+                .startSpan();
+
+        if (dbName != null) {
+            span.setAttribute("db.name", dbName);
+        }
+
+        return span;
+    }
+
+    /**
+     * Extracts the database system (mysql, postgresql, etc.) from the Statement's
+     * connection metadata. Falls back to "other_sql" if unavailable.
+     */
+    private static String extractDbSystem(Object statement) {
+        try {
+            Object connection = statement.getClass().getMethod("getConnection").invoke(statement);
+            Object metadata = connection.getClass().getMethod("getMetaData").invoke(connection);
+            String url = (String) metadata.getClass().getMethod("getURL").invoke(metadata);
+            if (url != null) {
+                // jdbc:mysql://... → mysql, jdbc:postgresql://... → postgresql
+                String withoutJdbc = url.startsWith("jdbc:") ? url.substring(5) : url;
+                int colonIdx = withoutJdbc.indexOf(':');
+                if (colonIdx > 0) {
+                    return withoutJdbc.substring(0, colonIdx).toLowerCase();
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * Extracts the database name from the Statement's connection metadata.
+     */
+    private static String extractDbName(Object statement) {
+        try {
+            Object connection = statement.getClass().getMethod("getConnection").invoke(statement);
+            Object metadata = connection.getClass().getMethod("getMetaData").invoke(connection);
+            String url = (String) metadata.getClass().getMethod("getURL").invoke(metadata);
+            return parseDbNameFromJdbcUrl(url);
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * Parses the database name from a JDBC URL.
+     * Examples: jdbc:postgresql://host:5432/mydb → mydb
+     *           jdbc:mysql://host:3306/testdb?param=val → testdb
+     */
+    private static String parseDbNameFromJdbcUrl(String url) {
+        if (url == null) return null;
+        try {
+            String withoutJdbc = url.startsWith("jdbc:") ? url.substring(5) : url;
+            java.net.URI uri = new java.net.URI(withoutJdbc);
+            String path = uri.getPath();
+            if (path != null && path.length() > 1) {
+                return path.substring(1).split("[?;]")[0];
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * Ends the span (success or error). Closes the scope if provided.
+     */
+    public static void endSpan(Span span, Scope scope, Throwable thrown) {
+        if (span == null) return;
+        try {
+            if (thrown != null) {
+                span.recordException(thrown,
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
+                span.setStatus(StatusCode.ERROR, thrown.getMessage());
+            }
+        } finally {
+            if (scope != null) {
+                scope.close();
+            }
+            span.end();
+        }
+    }
+}

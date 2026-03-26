@@ -2,6 +2,7 @@ package io.last9.tracing.otel.v3.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanBuilder;
@@ -12,8 +13,7 @@ import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 import io.vertx.core.Handler;
 import io.vertx.kafka.client.consumer.KafkaConsumerRecord;
 import io.vertx.kafka.client.producer.KafkaHeader;
@@ -125,18 +125,18 @@ public final class KafkaConsumerHelper {
             SpanBuilder spanBuilder = tracer.spanBuilder(topic + " process")
                     .setParent(Context.root())
                     .setSpanKind(SpanKind.CONSUMER)
-                    .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
-                    .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, topic)
-                    .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
-                            SemanticAttributes.MessagingOperationValues.PROCESS)
-                    .setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
+                    .setAttribute("messaging.system", "kafka")
+                    .setAttribute("messaging.destination.name", topic)
+                    .setAttribute("messaging.operation",
+                            "process")
+                    .setAttribute("messaging.kafka.destination.partition",
                             (long) cr.partition())
-                    .setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_OFFSET,
+                    .setAttribute("messaging.kafka.message.offset",
                             cr.offset())
                     .setAttribute("peer.service", "kafka");
 
             if (cr.key() != null) {
-                spanBuilder.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_KEY,
+                spanBuilder.setAttribute("messaging.kafka.message.key",
                         String.valueOf(cr.key()));
             }
 
@@ -153,7 +153,7 @@ public final class KafkaConsumerHelper {
                 original.handle(record);
             } catch (Throwable t) {
                 span.recordException(t,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
                 throw t;
             } finally {
@@ -184,18 +184,18 @@ public final class KafkaConsumerHelper {
             SpanBuilder spanBuilder = tracer.spanBuilder(topic + " process")
                     .setParent(Context.root())
                     .setSpanKind(SpanKind.CONSUMER)
-                    .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "kafka")
-                    .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, topic)
-                    .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
-                            SemanticAttributes.MessagingOperationValues.PROCESS)
-                    .setAttribute(SemanticAttributes.MESSAGING_KAFKA_DESTINATION_PARTITION,
+                    .setAttribute("messaging.system", "kafka")
+                    .setAttribute("messaging.destination.name", topic)
+                    .setAttribute("messaging.operation",
+                            "process")
+                    .setAttribute("messaging.kafka.destination.partition",
                             (long) record.partition())
-                    .setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_OFFSET,
+                    .setAttribute("messaging.kafka.message.offset",
                             record.offset())
                     .setAttribute("peer.service", "kafka");
 
             if (record.key() != null) {
-                spanBuilder.setAttribute(SemanticAttributes.MESSAGING_KAFKA_MESSAGE_KEY,
+                spanBuilder.setAttribute("messaging.kafka.message.key",
                         String.valueOf(record.key()));
             }
 
@@ -212,7 +212,7 @@ public final class KafkaConsumerHelper {
                 original.handle(record);
             } catch (Throwable t) {
                 span.recordException(t,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, t.getMessage());
                 throw t;
             } finally {

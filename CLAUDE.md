@@ -61,11 +61,30 @@ Always run `mvn test` before pushing.
 - `.github/workflows/release.yaml` triggers on push to `main`
 - `.github/workflows/ci.yaml` triggers on all branch pushes and PRs
 
-### Version conventions
+### Version conventions — CRITICAL for Maven Central publish
 - **pom.xml version**: Set to the target release version (e.g., `2.2.0`), NOT SNAPSHOT
 - **Git tags**: `v2.2.0-beta.N` for pre-releases, `v2.2.0` for releases
 - **Maven artifact version comes from pom.xml**, not git tags — keep them aligned manually
 - **Never delete/move pushed tags** — create a new beta number instead
+- **Before tagging a prerelease**: bump pom.xml version in ALL 6 files (parent + 5 children) to match the tag. If tag is `v2.2.3-beta.7`, all POMs must be `2.2.3-beta.7`. Maven Central rejects re-uploads of existing versions.
+
+### How to bump version and tag
+```bash
+# 1. Bump version in ALL POMs (parent + 5 children)
+for f in pom.xml vertx-otel-core/pom.xml vertx4-rxjava3-otel-autoconfigure/pom.xml \
+         vertx3-rxjava2-otel-autoconfigure/pom.xml vertx3-otel-agent/pom.xml vertx4-otel-agent/pom.xml; do
+  sed -i '' 's/OLD_VERSION/NEW_VERSION/' "$f"
+done
+
+# 2. Verify all POMs match
+grep -r "<version>NEW_VERSION</version>" */pom.xml pom.xml
+
+# 3. Commit, push, tag
+git add -A && git commit -m "chore: bump version to NEW_VERSION"
+git push origin BRANCH
+git tag -a vNEW_VERSION -m "description"
+git push origin vNEW_VERSION
+```
 
 ### Git workflow
 - Always use `git merge` to sync branches. **Never rebase.**
@@ -83,6 +102,32 @@ The `AgentBootstrap.premain()` execution order is critical. **Transformers MUST 
 ```
 
 **Why**: SDK init triggers class loading (Logback, SPI providers) which may transitively load application client classes. If transformers aren't registered yet, those classes load uninstrumented, and RETRANSFORMATION may fail silently.
+
+## Shade Relocations — CRITICAL
+
+All third-party libraries that the app might also bundle MUST be relocated in the `maven-shade-plugin` to avoid classpath conflicts. `appendToSystemClassLoaderSearch` puts our JAR LAST — the app's classes always win.
+
+### Currently relocated:
+| Package | Relocated to | Why |
+|---------|-------------|-----|
+| `io.opentelemetry` | `io.last9.internal.otel` | App may bundle OTel SDK/API/semconv |
+| `net.bytebuddy` | `io.last9.internal.bytebuddy` | App may bundle ByteBuddy (Mockito, Hibernate) |
+| `okhttp3` | `io.last9.internal.okhttp3` | App may bundle OkHttp (Retrofit, AWS SDK) |
+| `okio` | `io.last9.internal.okio` | Transitive from OkHttp |
+| `kotlin` | `io.last9.internal.kotlin` | Transitive from OkHttp |
+
+### NEVER relocate (agent advice interacts with app's actual objects):
+- `io.vertx.*` — Vert.x core, web, kafka, redis
+- `com.aerospike.*`, `redis.clients.jedis.*`, `io.lettuce.core.*` — DB clients
+- `org.apache.kafka.*`, `org.jboss.resteasy.*`, `java.sql.*` — messaging/DB
+- `org.slf4j.*`, `ch.qos.logback.*` — must log to app's framework
+- `io.micrometer.*`, `io.vertx.micrometer.*` — Vert.x metrics identity check
+
+### Rules for agent helper code:
+1. **Never use `SemanticAttributes.*` constants** — use string literals (`"http.request.method"`)
+2. **Never use `GlobalOpenTelemetry` from `io.opentelemetry.api`** — use the relocated version (happens automatically via shade)
+3. **All OTel API/SDK references are rewritten** by the shade plugin — no manual action needed
+4. **SPI files are auto-relocated** by `ServicesResourceTransformer` + shade relocations
 
 ## ByteBuddy Advice Rules
 

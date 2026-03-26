@@ -2,6 +2,7 @@ package io.last9.tracing.otel.v3.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
@@ -9,8 +10,7 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 
 import java.util.Collection;
 
@@ -57,14 +57,14 @@ public final class SqsReceiveHelper {
             Span span = tracer.spanBuilder(queueName + " receive")
                     .setParent(Context.root())
                     .setSpanKind(SpanKind.CONSUMER)
-                    .setAttribute(SemanticAttributes.MESSAGING_SYSTEM, "aws_sqs")
-                    .setAttribute(SemanticAttributes.MESSAGING_DESTINATION_NAME, queueName)
-                    .setAttribute(SemanticAttributes.MESSAGING_OPERATION,
-                            SemanticAttributes.MessagingOperationValues.RECEIVE)
+                    .setAttribute("messaging.system", "aws_sqs")
+                    .setAttribute("messaging.destination.name", queueName)
+                    .setAttribute("messaging.operation",
+                            "receive")
                     .setAttribute("messaging.aws.sqs.queue_url", queueUrl)
                     .setAttribute("peer.service", "sqs")
-                    .setAttribute(SemanticAttributes.SERVER_ADDRESS, serverAddr)
-                    .setAttribute(SemanticAttributes.NET_PEER_NAME, serverAddr)
+                    .setAttribute("server.address", serverAddr)
+                    .setAttribute("net.peer.name", serverAddr)
                     .startSpan();
 
             Scope scope = span.makeCurrent();
@@ -84,11 +84,11 @@ public final class SqsReceiveHelper {
         try {
             if (thrown != null) {
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             } else if (responseObj != null) {
                 int messageCount = extractMessageCount(responseObj);
-                span.setAttribute(SemanticAttributes.MESSAGING_BATCH_MESSAGE_COUNT,
+                span.setAttribute("messaging.batch.message_count",
                         (long) messageCount);
             }
         } finally {

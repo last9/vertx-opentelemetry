@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-        <version>2.2.3-beta.3</version>
+        <version>2.2.3-beta.11</version>
     </parent>
 
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
@@ -95,6 +95,27 @@
             <groupId>io.opentelemetry.instrumentation</groupId>
             <artifactId>opentelemetry-micrometer-1.5</artifactId>
             <version>${opentelemetry-instrumentation.version}-alpha</version>
+        </dependency>
+
+        <!-- ByteBuddy: bytecode instrumentation for zero-code tracing
+             (intercepts VertxBuilder.init() and Router.router() at class-load time) -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+        </dependency>
+        <!-- ByteBuddy Agent: self-attach for OtelLauncher (no -javaagent needed) -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy-agent</artifactId>
+        </dependency>
+
+        <!-- Aerospike client — provided scope for AerospikeClientAdvice compile.
+             App provides the actual client at runtime. -->
+        <dependency>
+            <groupId>com.aerospike</groupId>
+            <artifactId>aerospike-client</artifactId>
+            <version>${aerospike-client.version}</version>
+            <scope>provided</scope>
         </dependency>
 
         <!-- Logback (provided via core, needed at test time for MdcTraceTurboFilter tests) -->
