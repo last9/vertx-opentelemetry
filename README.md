@@ -16,11 +16,11 @@ Download from [Releases](https://github.com/last9/vertx-opentelemetry/releases):
 ```bash
 # Vert.x 3
 curl -L -o vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.7/vertx3-otel-agent-2.2.3-beta.7.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.11/vertx3-otel-agent-2.2.3-beta.11.jar
 
 # Vert.x 4
 curl -L -o vertx4-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.7/vertx4-otel-agent-2.2.3-beta.7.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.11/vertx4-otel-agent-2.2.3-beta.11.jar
 ```
 
 ### 2. Run your app with the agent
@@ -46,21 +46,21 @@ That's it. Every HTTP endpoint, database query, Kafka message, cache operation, 
 │  java -javaagent:vertx-otel-agent.jar -jar my-app.jar        │
 │                                                              │
 │  Vert.x 3 agent (ByteBuddy)     Vert.x 4 agent (SPI + BB)  │
-│  ├── Router       → SERVER      ├── HTTP server  → SERVER   │
-│  ├── WebClient    → CLIENT      ├── HTTP client  → CLIENT   │
-│  ├── KafkaProducer→ PRODUCER    ├── EventBus     → INTERNAL │
-│  ├── KafkaConsumer→ CONSUMER    ├── SQL client   → CLIENT   │
-│  ├── Netty HTTP   → CLIENT      ├── Redis client → CLIENT   │
-│  ├── MySQLPool    → CLIENT      ├── Kafka        → PROD/CON │
-│  ├── PgPool       → CLIENT      ├── Router names → http.route│
-│  ├── JDBCClient   → CLIENT      └── Micrometer   → metrics  │
-│  ├── Raw JDBC     → CLIENT                                  │
-│  ├── Jedis        → CLIENT      Shared (both agents):       │
-│  ├── Lettuce      → CLIENT      ├── Jedis        → CLIENT   │
-│  ├── Aerospike    → CLIENT      ├── Lettuce      → CLIENT   │
-│  ├── RESTEasy     → http.route  ├── Raw JDBC     → CLIENT   │
-│  └── AWS SQS      → CONSUMER   ├── Aerospike    → CLIENT   │
-│                                  ├── RESTEasy     → http.route│
+│  ├── Netty HTTP   → SERVER      ├── HTTP server  → SERVER   │
+│  ├── Router       → SERVER      ├── HTTP client  → CLIENT   │
+│  ├── WebClient    → CLIENT      ├── EventBus     → INTERNAL │
+│  ├── KafkaProducer→ PRODUCER    ├── SQL client   → CLIENT   │
+│  ├── KafkaConsumer→ CONSUMER    ├── Redis client → CLIENT   │
+│  ├── Netty client → CLIENT      ├── Kafka        → PROD/CON │
+│  ├── MySQLPool    → CLIENT      ├── Router names → http.route│
+│  ├── PgPool       → CLIENT      └── Micrometer   → metrics  │
+│  ├── JDBCClient   → CLIENT                                  │
+│  ├── Raw JDBC     → CLIENT      Shared (both agents):       │
+│  ├── Jedis        → CLIENT      ├── Jedis        → CLIENT   │
+│  ├── Lettuce      → CLIENT      ├── Lettuce      → CLIENT   │
+│  ├── Aerospike    → CLIENT      ├── Raw JDBC     → CLIENT   │
+│  ├── RESTEasy     → http.route  ├── Aerospike    → CLIENT   │
+│  └── AWS SQS      → CONSUMER   ├── RESTEasy     → http.route│
 │  + RxJava 2/3 context propagation across all operators       │
 │  + W3C traceparent propagation (distributed tracing)         │
 │  + Log-trace correlation (auto-installed into Logback)       │
@@ -91,12 +91,13 @@ No code changes or `Traced*` wrappers needed. ByteBuddy instruments these at cla
 
 | Component | Span Kind | Attributes |
 |-----------|-----------|------------|
+| **Netty HTTP server** (all requests) | SERVER | `http.request.method`, `url.path`, `http.response.status_code`, `server.address` |
 | **Router** (RxJava2 + core) | SERVER | `http.method`, `http.route`, `http.status_code` |
 | **WebClient** | CLIENT | `http.request.method`, `url.full`, `server.address`, `http.response.status_code` |
 | **JDBCClient** (any JDBC driver) | CLIENT | `db.system`, `db.name`, `db.statement` |
 | **KafkaProducer** | PRODUCER | `messaging.system=kafka`, `messaging.destination.name`, `messaging.operation` |
 | **KafkaConsumer** | CONSUMER | `messaging.system=kafka`, `messaging.destination.name`, `messaging.batch.message_count` |
-| **AerospikeClient** (single + batch) | CLIENT | `db.system=aerospike`, `db.name`, `db.operation` |
+| **AerospikeClient** (sync + batch + async) | CLIENT | `db.system=aerospike`, `db.name`, `net.peer.name`, `net.peer.port` |
 | **MySQLPool / PgPool** (reactive SQL) | CLIENT | `db.system`, `db.name`, `db.statement`, `net.peer.name` |
 | **Jedis** (Pool, Cluster, Pipeline) | CLIENT | `db.system=redis`, `db.statement` |
 | **Lettuce** (sync/async/reactive) | CLIENT | `db.system=redis`, `db.statement` |
@@ -139,7 +140,7 @@ The agent uses the OkHttp-based OTLP sender (shaded as `io.last9.internal.okhttp
 ```bash
 # Download once (bake into AMI or fetch at startup)
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.7/vertx3-otel-agent-2.2.3-beta.7.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3-beta.11/vertx3-otel-agent-2.2.3-beta.11.jar
 
 # Add to your systemd unit or startup script
 java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar /opt/app/my-app.jar
@@ -166,6 +167,8 @@ The agent uses classloader isolation and namespace shading:
 6. Log-trace correlation is auto-installed into Logback — no `logback.xml` changes needed
 
 **No Maven dependency required.** The agent is fully self-contained. Your app doesn't need any `io.last9` dependency in `pom.xml`.
+
+> **WARNING: Do NOT add `io.last9:vertx3-rxjava2-otel-autoconfigure` (or the v4 equivalent) as a Maven dependency when using the `-javaagent` approach.** The app's unshaded library classes will shadow the agent's shaded classes, causing a no-op tracer and zero spans. If you previously used library mode and are migrating to the agent, remove the `io.last9` dependencies from your `pom.xml`.
 
 **Safe with existing OTel dependencies.** The agent's OTel SDK is fully isolated under `io.last9.internal.otel.*`. If your app already bundles `opentelemetry-api`, `opentelemetry-sdk`, or `opentelemetry-semconv` — no conflict. The agent ignores the app's OTel classes entirely.
 
@@ -234,7 +237,9 @@ If outgoing calls show as separate root traces:
 If CLIENT spans (database, HTTP client) flow but SERVER spans don't:
 
 1. **Check transformation logs** — look for `transformed io.vertx.reactivex.ext.web.Router (loaded=false)` and `HttpServerAdviceHelper: wrapping requestHandler`
-2. **If `HttpServerAdviceHelper` log is missing** — the helper failed to load. Check for `failed to wrap requestHandler` WARN message. Common cause: app bundles conflicting OTel classes. Upgrade to v2.2.3-beta.7+ which shades the OTel namespace.
+2. **Check the tracer status** — look for `Tracer OK (io.last9.internal.otel.sdk.trace.SdkTracer)` on stderr. If you see `Tracer is NO-OP`, the agent's SDK wasn't initialized correctly
+3. **Check for classpath conflicts** — look for `WARNING: HttpServerAdviceHelper is missing version marker` on stderr. This means the app bundles an older `io.last9:vertx3-rxjava2-otel-autoconfigure` dependency that shadows the agent. **Fix: remove the `io.last9` dependency from your `pom.xml`**
+4. **If `HttpServerAdviceHelper` log is missing** — the helper failed to load. Check for `failed to wrap requestHandler` WARN message on stderr with full diagnostics
 
 ## Why Not the OTel Java Agent?
 
@@ -276,7 +281,7 @@ Both standalone agents work on **JDK and JRE** with full classloader isolation.
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>2.2.3-beta.7</version>
+    <version>2.2.3-beta.11</version>
 </dependency>
 ```
 
@@ -303,7 +308,7 @@ consumer.batchHandler(KafkaTracing.tracedBatchHandler(topicName, this::handleBat
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>2.2.3-beta.7</version>
+    <version>2.2.3-beta.11</version>
 </dependency>
 ```
 
