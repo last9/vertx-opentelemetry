@@ -218,6 +218,28 @@ class HttpServerAdviceHelperTest {
         assertThat(HttpServerAdviceHelper.wrapHandler(null)).isNull();
     }
 
+    /**
+     * Verifies that HttpServerAdvice does NOT use suppress = Throwable.class,
+     * so errors are visible instead of silently swallowed.
+     */
+    @Test
+    void adviceDoesNotSuppressErrors() throws Exception {
+        String className = HttpServerAdvice.class.getName().replace('.', '/') + ".class";
+        byte[] bytecode;
+        try (java.io.InputStream is = HttpServerAdvice.class.getClassLoader()
+                .getResourceAsStream(className)) {
+            assertThat(is).as("HttpServerAdvice.class should be loadable").isNotNull();
+            bytecode = is.readAllBytes();
+        }
+        // The advice should NOT contain "suppress" annotation — we handle errors explicitly
+        // with try-catch and System.err for maximum visibility
+        String bytecodeAsString = new String(bytecode, java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertThat(bytecodeAsString)
+                .as("HttpServerAdvice should not use suppress = Throwable.class — "
+                        + "errors must be logged to stderr for diagnosability")
+                .doesNotContain("suppress");
+    }
+
     private void waitForSpans(int minCount) throws InterruptedException {
         for (int i = 0; i < 50; i++) {
             if (spanExporter.getFinishedSpanItems().size() >= minCount) {
