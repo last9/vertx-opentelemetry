@@ -16,11 +16,11 @@ Download from [Releases](https://github.com/last9/vertx-opentelemetry/releases):
 ```bash
 # Vert.x 3
 curl -L -o vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3/vertx3-otel-agent-2.2.3.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.0/vertx3-otel-agent-2.3.0.jar
 
 # Vert.x 4
 curl -L -o vertx4-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3/vertx4-otel-agent-2.2.3.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.0/vertx4-otel-agent-2.3.0.jar
 ```
 
 ### 2. Run your app with the agent
@@ -140,7 +140,7 @@ The agent uses the OkHttp-based OTLP sender (shaded as `io.last9.internal.okhttp
 ```bash
 # Download once (bake into AMI or fetch at startup)
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.2.3/vertx3-otel-agent-2.2.3.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.0/vertx3-otel-agent-2.3.0.jar
 
 # Add to your systemd unit or startup script
 java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar /opt/app/my-app.jar
@@ -281,7 +281,7 @@ Both standalone agents work on **JDK and JRE** with full classloader isolation.
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>2.2.3</version>
+    <version>2.3.0</version>
 </dependency>
 ```
 
@@ -308,7 +308,7 @@ consumer.batchHandler(KafkaTracing.tracedBatchHandler(topicName, this::handleBat
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>2.2.3</version>
+    <version>2.3.0</version>
 </dependency>
 ```
 
