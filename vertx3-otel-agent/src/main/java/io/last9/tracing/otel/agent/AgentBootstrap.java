@@ -104,7 +104,8 @@ public final class AgentBootstrap {
             // 4. Initialize OTel SDK + RxJava hooks on the app classloader
             initializeOnAppClassLoader();
 
-            // 5. Check for classpath conflicts — older library versions shadowing agent classes
+            // 5. Post-hoc diagnostic: detect classpath conflicts that may have already
+            //    broken initialization. Cannot prevent the issue, only make it visible.
             checkClasspathConflicts();
 
             log("[Last9 OTel Agent] Zero-code instrumentation installed successfully");
@@ -249,18 +250,17 @@ public final class AgentBootstrap {
                         + "your pom.xml — the agent is fully self-contained.");
             }
 
-            // Check if GlobalOpenTelemetry is the shaded version
-            Class<?> gotClass = appCL.loadClass(
-                    "io.opentelemetry.api.GlobalOpenTelemetry");
-            // If we got here, the UNSHADED GlobalOpenTelemetry exists on the classpath.
-            // In a clean agent-only setup, only io.last9.internal.otel.api.GlobalOpenTelemetry
-            // would exist. The unshaded version comes from the app's OTel dependency.
-            log("[Last9 OTel Agent] NOTE: Unshaded io.opentelemetry.api.GlobalOpenTelemetry found on classpath. "
-                    + "If the app bundles its own OTel SDK, the agent's shaded SDK is isolated and "
-                    + "will not conflict. However, if the app also bundles vertx3-rxjava2-otel-autoconfigure "
-                    + "(pre-beta.7), helpers will use the wrong GlobalOpenTelemetry.");
-        } catch (ClassNotFoundException e) {
-            // Expected in clean setups — unshaded class not present
+            // Check if the unshaded GlobalOpenTelemetry class exists on the classpath.
+            // Use getResource() instead of loadClass() to avoid triggering static initializers
+            // which could interact with the already-initialized shaded SDK.
+            boolean unshadedOtelPresent = appCL.getResource(
+                    "io/opentelemetry/api/GlobalOpenTelemetry.class") != null;
+            if (unshadedOtelPresent) {
+                log("[Last9 OTel Agent] NOTE: Unshaded io.opentelemetry.api.GlobalOpenTelemetry found on classpath. "
+                        + "If the app bundles its own OTel SDK, the agent's shaded SDK is isolated and "
+                        + "will not conflict. However, if the app also bundles vertx3-rxjava2-otel-autoconfigure "
+                        + "(pre-beta.7), helpers will use the wrong GlobalOpenTelemetry.");
+            }
         } catch (Throwable t) {
             log("[Last9 OTel Agent] Classpath check failed: " + t.getMessage());
         }

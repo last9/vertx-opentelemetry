@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Helper for {@link HttpServerAdvice}. Wraps an HTTP request handler with
@@ -94,7 +95,10 @@ public final class HttpServerAdviceHelper {
      * GlobalOpenTelemetry class is in use. Critical for diagnosing classpath conflicts
      * when the app bundles an older version of the library alongside the agent.
      */
+    private static final AtomicBoolean DIAGNOSTICS_LOGGED = new AtomicBoolean(false);
+
     private static void logClassLoadingDiagnostics() {
+        if (!DIAGNOSTICS_LOGGED.compareAndSet(false, true)) return;
         try {
             // Where was this helper loaded from?
             java.security.CodeSource cs = HttpServerAdviceHelper.class.getProtectionDomain().getCodeSource();
@@ -143,7 +147,7 @@ public final class HttpServerAdviceHelper {
 
         // Diagnostic: verify tracer is not no-op (which would silently produce zero spans)
         String tracerClass = tracer.getClass().getName();
-        boolean isNoop = tracerClass.contains("Noop") || tracerClass.contains("Default");
+        boolean isNoop = tracerClass.contains("Noop") || tracerClass.endsWith("DefaultTracer");
         if (isNoop) {
             String msg = "HttpServerAdviceHelper: Tracer is NO-OP (" + tracerClass + ") — "
                     + "SERVER spans will be created but silently discarded. "
