@@ -185,6 +185,27 @@ public final class Vertx3Instrumenter {
         } catch (Throwable t) {
             log.warn("Vertx3Instrumenter: HTTP server instrumentation skipped: {}", t.getMessage());
         }
+
+        // HttpStreamHandler.handler() — covers the requestStream().toFlowable() pattern.
+        // In Vert.x 3.9.x, requestStream().toFlowable() sets the handler directly on the
+        // inner HttpStreamHandler class via putfield, bypassing requestHandler(). This
+        // intercept catches that code path so apps using requestStream get SERVER spans.
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.vertx.core.http.impl.HttpServerImpl$HttpStreamHandler"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(HttpServerAdvice.class)
+                                    .on(named("handler")
+                                            .and(takesArguments(1))
+                                            .and(takesArgument(0, named("io.vertx.core.Handler"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: HTTP server requestStream instrumentation installed");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: HTTP server requestStream instrumentation skipped: {}", t.getMessage());
+        }
     }
 
     /**
