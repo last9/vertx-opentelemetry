@@ -42,7 +42,7 @@ public final class HttpServerAdviceHelper {
      * If the app bundles an older version of this class, the version won't match
      * the agent's expected version, revealing a classpath shadowing issue.
      */
-    public static final String HELPER_VERSION = "2.3.1-beta.3";
+    public static final String HELPER_VERSION = "2.3.1-beta.4";
 
     /**
      * Track wrapped handlers to avoid double-wrapping when requestHandler()
@@ -215,11 +215,14 @@ public final class HttpServerAdviceHelper {
                     span.setAttribute(AttributeKey.longKey("server.port"), serverPort);
                 }
 
-                // Set response attributes and end span when body is fully sent.
-                // The span is NOT ended here — it's ended in bodyEndHandler after the
-                // response is fully sent. But the SCOPE must be closed immediately after
-                // the handler returns to avoid context leaks on the event loop thread.
+                // End span when response completes. Multiple fallback handlers ensure
+                // the span ends regardless of the HTTP server setup pattern:
+                // - bodyEndHandler: standard Vert.x callback after response body is written
+                // - endHandler: WriteStream end callback (fallback for requestStream patterns)
+                // - closeHandler: connection close (last resort)
+                // The span.isRecording() check ensures only the first handler ends the span.
                 HttpServerResponse response = request.response();
+
                 response.headersEndHandler(v -> {
                     int statusCode = response.getStatusCode();
                     span.setAttribute(AttributeKey.longKey("http.response.status_code"), (long) statusCode);
@@ -228,11 +231,20 @@ public final class HttpServerAdviceHelper {
                     }
                 });
 
-                response.bodyEndHandler(v -> span.end());
+                response.bodyEndHandler(v -> {
+                    if (span.isRecording()) {
+                        span.end();
+                    }
+                });
 
-                // Handle connection reset / close before response
+                response.endHandler(v -> {
+                    if (span.isRecording()) {
+                        span.end();
+                    }
+                });
+
                 response.closeHandler(v -> {
-                    if (!response.ended()) {
+                    if (span.isRecording()) {
                         span.setStatus(StatusCode.ERROR, "Connection closed before response completed");
                         span.end();
                     }

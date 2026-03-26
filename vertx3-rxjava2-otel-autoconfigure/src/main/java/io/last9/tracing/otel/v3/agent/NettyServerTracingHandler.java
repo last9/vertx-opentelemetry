@@ -108,7 +108,10 @@ public final class NettyServerTracingHandler extends ChannelDuplexHandler {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof HttpRequest) {
-            startServerSpan(ctx, (HttpRequest) msg);
+            HttpRequest req = (HttpRequest) msg;
+            System.err.println("[Last9 OTel Agent] NettyServerTracingHandler.channelRead: "
+                    + req.method() + " " + req.uri());
+            startServerSpan(ctx, req);
         }
         super.channelRead(ctx, msg);
     }
@@ -117,9 +120,13 @@ public final class NettyServerTracingHandler extends ChannelDuplexHandler {
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise)
             throws Exception {
         if (msg instanceof HttpResponse) {
-            setResponseStatus(ctx, (HttpResponse) msg);
+            HttpResponse resp = (HttpResponse) msg;
+            System.err.println("[Last9 OTel Agent] NettyServerTracingHandler.write: status="
+                    + resp.status().code());
+            setResponseStatus(ctx, resp);
         }
         if (msg instanceof LastHttpContent) {
+            System.err.println("[Last9 OTel Agent] NettyServerTracingHandler.write: LastHttpContent — ending span");
             endServerSpan(ctx);
         }
         super.write(ctx, msg, promise);
