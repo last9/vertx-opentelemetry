@@ -66,6 +66,16 @@ public final class NettyServerTracingHandler {
     private static final AttributeKey<HttpResponse> SERVER_RESPONSE_KEY =
             AttributeKey.valueOf("last9.http.server.response");
 
+    // Pre-allocated attribute keys — avoid per-request allocation
+    private static final io.opentelemetry.api.common.AttributeKey<Long> ATTR_SERVER_PORT =
+            io.opentelemetry.api.common.AttributeKey.longKey("server.port");
+    private static final io.opentelemetry.api.common.AttributeKey<Long> ATTR_STATUS_CODE =
+            io.opentelemetry.api.common.AttributeKey.longKey("http.response.status_code");
+
+    // Cached tracer and propagator — initialized lazily on first request
+    private static volatile Tracer cachedTracer;
+    private static volatile TextMapPropagator cachedPropagator;
+
     private static final TextMapGetter<HttpRequest> HEADER_GETTER = new TextMapGetter<HttpRequest>() {
         @Override
         public Iterable<String> keys(HttpRequest carrier) {
@@ -203,6 +213,13 @@ public final class NettyServerTracingHandler {
         @Override
         public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise)
                 throws Exception {
+            // Early exit for non-HTTP frames (chunked body ByteBuf, etc.)
+            // Avoids channel attribute lookup on every intermediate write.
+            if (!(msg instanceof HttpResponse) && !(msg instanceof LastHttpContent)) {
+                super.write(ctx, msg, promise);
+                return;
+            }
+
             Context otelContext = ctx.channel().attr(SERVER_CONTEXT_KEY).get();
 
             if (msg instanceof HttpResponse) {
@@ -261,47 +278,33 @@ public final class NettyServerTracingHandler {
      */
     private static Context startServerSpan(ChannelHandlerContext ctx, HttpRequest request) {
         try {
-            // Deduplication: if a SERVER span already exists, skip creation.
-            // This prevents duplicates when both Netty and Vert.x-level tracing fire.
-            Span existing = Span.current();
-            if (existing.getSpanContext().isValid()
-                    && existing.getSpanContext().isRemote() == false) {
-                // A local span is already active — don't create another
+            // Deduplication: check channel attribute, not Span.current() (thread-scoped).
+            // Channel attribute is per-connection, immune to stale scopes on event loop threads.
+            if (ctx.channel().attr(SERVER_CONTEXT_KEY).get() != null) {
                 return null;
             }
 
-            Tracer tracer = GlobalOpenTelemetry.getTracer(TRACER_NAME);
-            TextMapPropagator propagator = GlobalOpenTelemetry.getPropagators().getTextMapPropagator();
+            // Lazy-init tracer and propagator (cached after first request)
+            if (cachedTracer == null) {
+                cachedTracer = GlobalOpenTelemetry.getTracer(TRACER_NAME);
+                cachedPropagator = GlobalOpenTelemetry.getPropagators().getTextMapPropagator();
+            }
 
             String method = request.method().name();
             String uri = request.uri();
-            String path = uri.contains("?") ? uri.substring(0, uri.indexOf('?')) : uri;
+            int q = uri.indexOf('?');
+            String path = q >= 0 ? uri.substring(0, q) : uri;
 
-            // Extract parent context from traceparent headers
-            Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
+            Context parentContext = cachedPropagator.extract(Context.root(), request, HEADER_GETTER);
 
-            Span span = tracer.spanBuilder(method + " " + path)
+            Span span = cachedTracer.spanBuilder(method + " " + path)
                     .setParent(parentContext)
                     .setSpanKind(SpanKind.SERVER)
                     .setAttribute("http.request.method", method)
                     .setAttribute("url.path", path)
                     .startSpan();
 
-            // Parse Host header
-            String host = request.headers().get("Host");
-            if (host != null) {
-                String serverAddr = host;
-                if (host.contains(":")) {
-                    int idx = host.lastIndexOf(':');
-                    serverAddr = host.substring(0, idx);
-                    try {
-                        long port = Long.parseLong(host.substring(idx + 1));
-                        span.setAttribute(
-                                io.opentelemetry.api.common.AttributeKey.longKey("server.port"), port);
-                    } catch (NumberFormatException ignored) {}
-                }
-                span.setAttribute("server.address", serverAddr);
-            }
+            applyHostHeader(span, request.headers().get("Host"));
 
             // Store full Context (not just Span) in channel attribute
             Context otelContext = parentContext.with(span);
@@ -319,15 +322,30 @@ public final class NettyServerTracingHandler {
         try {
             Span span = Span.fromContext(otelContext);
             int statusCode = response.status().code();
-            span.setAttribute(
-                    io.opentelemetry.api.common.AttributeKey.longKey("http.response.status_code"),
-                    (long) statusCode);
+            span.setAttribute(ATTR_STATUS_CODE, (long) statusCode);
             if (statusCode >= 500) {
                 span.setStatus(StatusCode.ERROR);
             }
         } catch (Throwable t) {
             log.warn("NettyServerTracingHandler: failed to set response status: {}", t.getMessage());
         }
+    }
+
+    /**
+     * Shared host-header parser — extracts server.address and server.port from Host header.
+     * Used by both Netty handler and HttpServerAdviceHelper.
+     */
+    static void applyHostHeader(Span span, String host) {
+        if (host == null) return;
+        String serverAddr = host;
+        int idx = host.lastIndexOf(':');
+        if (idx > 0) {
+            serverAddr = host.substring(0, idx);
+            try {
+                span.setAttribute(ATTR_SERVER_PORT, Long.parseLong(host.substring(idx + 1)));
+            } catch (NumberFormatException ignored) {}
+        }
+        span.setAttribute("server.address", serverAddr);
     }
 
     private static void endServerSpan(ChannelHandlerContext ctx, Throwable error) {

@@ -183,20 +183,6 @@ public final class HttpServerAdviceHelper {
 
                 Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
 
-                // Parse host header for server.address and server.port
-                String hostHeader = request.host();
-                String serverAddr = hostHeader;
-                long serverPort = -1;
-                if (hostHeader != null && hostHeader.contains(":")) {
-                    int idx = hostHeader.lastIndexOf(':');
-                    serverAddr = hostHeader.substring(0, idx);
-                    try {
-                        serverPort = Long.parseLong(hostHeader.substring(idx + 1));
-                    } catch (NumberFormatException ignored) {
-                        // keep -1
-                    }
-                }
-
                 Span span = tracer.spanBuilder(method + " " + path)
                         .setParent(parentContext)
                         .setSpanKind(SpanKind.SERVER)
@@ -204,12 +190,9 @@ public final class HttpServerAdviceHelper {
                         .setAttribute("url.path", path)
                         .setAttribute("url.scheme",
                                 request.isSSL() ? "https" : "http")
-                        .setAttribute("server.address", serverAddr)
                         .startSpan();
 
-                if (serverPort > 0) {
-                    span.setAttribute(AttributeKey.longKey("server.port"), serverPort);
-                }
+                NettyServerTracingHandler.applyHostHeader(span, request.host());
 
                 // End span when response completes. Multiple fallback handlers ensure
                 // the span ends regardless of the HTTP server setup pattern:
