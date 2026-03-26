@@ -2,14 +2,14 @@ package io.last9.tracing.otel.v3.agent;
 
 import com.aerospike.client.Key;
 import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 
 /**
  * Helper methods called by {@link AerospikeClientAdvice} to create CLIENT spans
@@ -25,6 +25,14 @@ public final class AerospikeClientHelper {
 
     private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
 
+    /**
+     * Guard to prevent double spans when both AerospikeClientAdvice (on the public API)
+     * and AerospikeSyncCommandAdvice (on the internal command) fire for the same call.
+     * The first advice to enter sets this to true; the second sees it and skips.
+     */
+    static final ThreadLocal<Boolean> IN_AEROSPIKE_CALL =
+            ThreadLocal.withInitial(() -> false);
+
     private AerospikeClientHelper() {}
 
     /**
@@ -36,9 +44,10 @@ public final class AerospikeClientHelper {
      * @return the span, or null if suppressed
      */
     public static Span startSpan(String operation, Key key) {
-        if (AgentGuard.IN_DB_TRACED_CALL.get()) {
+        if (AgentGuard.IN_DB_TRACED_CALL.get() || IN_AEROSPIKE_CALL.get()) {
             return null;
         }
+        IN_AEROSPIKE_CALL.set(true);
 
         Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
 
@@ -53,12 +62,12 @@ public final class AerospikeClientHelper {
 
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
-                .setAttribute(SemanticAttributes.DB_SYSTEM, "aerospike")
-                .setAttribute(SemanticAttributes.DB_STATEMENT, operation)
+                .setAttribute("db.system", "aerospike")
+                .setAttribute("db.statement", operation)
                 .startSpan();
 
         if (dbNamespace != null) {
-            span.setAttribute(SemanticAttributes.DB_NAME, dbNamespace);
+            span.setAttribute("db.name", dbNamespace);
         }
 
         return span;
@@ -68,9 +77,10 @@ public final class AerospikeClientHelper {
      * Starts a CLIENT span for batch Aerospike operations.
      */
     public static Span startBatchSpan(String operation, Key[] keys) {
-        if (AgentGuard.IN_DB_TRACED_CALL.get()) {
+        if (AgentGuard.IN_DB_TRACED_CALL.get() || IN_AEROSPIKE_CALL.get()) {
             return null;
         }
+        IN_AEROSPIKE_CALL.set(true);
 
         Tracer tracer = GlobalOpenTelemetry.get().getTracer(TRACER_NAME);
 
@@ -80,15 +90,127 @@ public final class AerospikeClientHelper {
 
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
-                .setAttribute(SemanticAttributes.DB_SYSTEM, "aerospike")
-                .setAttribute(SemanticAttributes.DB_STATEMENT, operation)
+                .setAttribute("db.system", "aerospike")
+                .setAttribute("db.statement", operation)
                 .startSpan();
 
         if (dbNamespace != null) {
-            span.setAttribute(SemanticAttributes.DB_NAME, dbNamespace);
+            span.setAttribute("db.name", dbNamespace);
         }
 
         return span;
+    }
+
+    /**
+     * Starts a span by scanning method arguments for Key or Key[].
+     * Used by the pattern-based sync advice that matches all public methods
+     * with a Policy-subclass first argument.
+     */
+    public static Span startSpanFromArgs(String operation, Object[] args) {
+        if (args == null) return startSpan(operation, null);
+        for (Object arg : args) {
+            if (arg instanceof Key) {
+                return startSpan(operation, (Key) arg);
+            }
+            if (arg instanceof Key[]) {
+                return startBatchSpan(operation, (Key[]) arg);
+            }
+        }
+        return startSpan(operation, null);
+    }
+
+    /**
+     * Enriches the current span with Aerospike connection metadata.
+     * Called from AerospikeCommandNodeAdvice after Command.getNode() returns.
+     */
+    public static void enrichWithConnectionMetadata(Object nodeObj, Object partitionObj) {
+        Span span = Span.current();
+        if (!span.getSpanContext().isValid()) return;
+
+        try {
+            // Node.getHost() → Host.name, Host.port
+            java.lang.reflect.Method getHost = nodeObj.getClass().getMethod("getHost");
+            Object host = getHost.invoke(nodeObj);
+            if (host != null) {
+                java.lang.reflect.Field nameField = host.getClass().getField("name");
+                java.lang.reflect.Field portField = host.getClass().getField("port");
+                String hostname = (String) nameField.get(host);
+                int port = portField.getInt(host);
+                span.setAttribute("net.peer.name", hostname);
+                span.setAttribute(AttributeKey.longKey("net.peer.port"), (long) port);
+            }
+        } catch (Exception ignored) {}
+
+        // Extract namespace from Partition
+        try {
+            java.lang.reflect.Field nsField = findField(partitionObj.getClass(), "namespace");
+            if (nsField != null) {
+                nsField.setAccessible(true);
+                Object ns = nsField.get(partitionObj);
+                if (ns instanceof String) {
+                    span.setAttribute("db.name", (String) ns);
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private static java.lang.reflect.Field findField(Class<?> clazz, String name) {
+        while (clazz != null && clazz != Object.class) {
+            try {
+                return clazz.getDeclaredField(name);
+            } catch (NoSuchFieldException e) {
+                clazz = clazz.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Wraps an async Aerospike listener with span lifecycle management.
+     * Uses dynamic proxy to support all listener interfaces.
+     *
+     * @param listener the original listener (RecordListener, WriteListener, etc.)
+     * @param span     the CLIENT span to end on callback
+     * @return a proxy that delegates to the original listener and ends the span
+     */
+    public static Object wrapAsyncListener(Object listener, Span span) {
+        if (listener == null) return null;
+        Class<?>[] interfaces = listener.getClass().getInterfaces();
+        if (interfaces.length == 0) {
+            // Might be a lambda or anonymous class — get interfaces from superclass
+            interfaces = listener.getClass().getSuperclass() != null
+                    ? listener.getClass().getSuperclass().getInterfaces()
+                    : new Class<?>[0];
+        }
+        if (interfaces.length == 0) return listener;
+
+        final Span capturedSpan = span;
+        return java.lang.reflect.Proxy.newProxyInstance(
+                listener.getClass().getClassLoader(),
+                interfaces,
+                (proxy, method, args) -> {
+                    try {
+                        Object result = method.invoke(listener, args);
+                        return result;
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    } finally {
+                        String methodName = method.getName();
+                        if ("onSuccess".equals(methodName)) {
+                            capturedSpan.end();
+                            IN_AEROSPIKE_CALL.set(false);
+                        } else if ("onFailure".equals(methodName)) {
+                            if (args != null && args.length > 0 && args[0] instanceof Throwable) {
+                                Throwable t = (Throwable) args[0];
+                                capturedSpan.recordException(t,
+                                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
+                                capturedSpan.setStatus(StatusCode.ERROR, t.getMessage());
+                            }
+                            capturedSpan.end();
+                            IN_AEROSPIKE_CALL.set(false);
+                        }
+                    }
+                });
     }
 
     /**
@@ -99,10 +221,11 @@ public final class AerospikeClientHelper {
         try {
             if (thrown != null) {
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             }
         } finally {
+            IN_AEROSPIKE_CALL.set(false);
             if (scope != null) {
                 scope.close();
             }

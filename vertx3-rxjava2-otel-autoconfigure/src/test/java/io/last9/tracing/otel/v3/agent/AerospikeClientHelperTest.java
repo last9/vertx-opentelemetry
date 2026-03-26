@@ -27,6 +27,7 @@ class AerospikeClientHelperTest {
         otel.setUp();
         spanExporter = otel.getSpanExporter();
         AgentGuard.IN_DB_TRACED_CALL.set(false);
+        AerospikeClientHelper.IN_AEROSPIKE_CALL.set(false);
     }
 
     @AfterEach
@@ -138,4 +139,158 @@ class AerospikeClientHelperTest {
         assertThat(sd.getStatus().getStatusCode()).isNotEqualTo(StatusCode.ERROR);
         assertThat(sd.getEvents()).isEmpty();
     }
+
+    // --- startSpanFromArgs tests (pattern-based matching) ---
+
+    @Test
+    void startSpanFromArgs_findsKeyInArgs() {
+        Key key = new Key("ns1", "set1", "k1");
+        Object[] args = {new Object(), key, "extra"};
+        Span span = AerospikeClientHelper.startSpanFromArgs("GET", args);
+
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).isEqualTo("aerospike GET ns1.set1");
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.name"))).isEqualTo("ns1");
+    }
+
+    @Test
+    void startSpanFromArgs_findsKeyArrayInArgs() {
+        Key[] keys = {new Key("ns1", "set1", "k1"), new Key("ns1", "set1", "k2")};
+        Object[] args = {new Object(), keys};
+        Span span = AerospikeClientHelper.startSpanFromArgs("GET", args);
+
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).isEqualTo("aerospike GET (2 keys)");
+    }
+
+    @Test
+    void startSpanFromArgs_noKeyInArgs() {
+        Object[] args = {new Object(), "namespace", "setName"};
+        Span span = AerospikeClientHelper.startSpanFromArgs("SCAN_ALL", args);
+
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).isEqualTo("aerospike SCAN_ALL");
+    }
+
+    @Test
+    void startSpanFromArgs_nullArgs() {
+        Span span = AerospikeClientHelper.startSpanFromArgs("QUERY", null);
+
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).isEqualTo("aerospike QUERY");
+    }
+
+    // --- wrapAsyncListener tests ---
+
+    @Test
+    void wrapAsyncListener_endsSpanOnSuccess() {
+        Key key = new Key("ns1", "set1", "k1");
+        Span span = AerospikeClientHelper.startSpan("GET", key);
+        assertThat(span).isNotNull();
+
+        SuccessCallback listener = () -> {};
+        Object wrapped = AerospikeClientHelper.wrapAsyncListener(listener, span);
+
+        assertThat(wrapped).isNotSameAs(listener);
+        ((SuccessCallback) wrapped).onSuccess();
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+        assertThat(spans.get(0).getName()).contains("aerospike GET");
+    }
+
+    @Test
+    void wrapAsyncListener_endsSpanOnFailure() {
+        Key key = new Key("ns1", "set1", "k1");
+        Span span = AerospikeClientHelper.startSpan("PUT", key);
+        assertThat(span).isNotNull();
+
+        FailureCallback listener = t -> {};
+        Object wrapped = AerospikeClientHelper.wrapAsyncListener(listener, span);
+
+        ((FailureCallback) wrapped).onFailure(new RuntimeException("timeout"));
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+        assertThat(spans.get(0).getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+    }
+
+    @Test
+    void wrapAsyncListener_returnsNullForNull() {
+        assertThat(AerospikeClientHelper.wrapAsyncListener(null, null)).isNull();
+    }
+
+    // --- enrichWithConnectionMetadata tests ---
+
+    @Test
+    void enrichWithConnectionMetadata_setsAttributesFromNode() throws Exception {
+        // Create a span and make it current
+        Key key = new Key("test-ns", "users", "u1");
+        Span span = AerospikeClientHelper.startSpan("GET", key);
+        Scope scope = span.makeCurrent();
+
+        // Create mock Node-like object with getHost() method via a real Aerospike Node
+        // We can't easily construct a real Node, so test the reflection path handles
+        // objects without getHost() gracefully
+        AerospikeClientHelper.enrichWithConnectionMetadata(new Object(), new Object());
+
+        // Span should still work (no exception)
+        AerospikeClientHelper.endSpan(span, scope, null);
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).contains("aerospike GET");
+    }
+
+    @Test
+    void enrichWithConnectionMetadata_noSpanActive() {
+        // When no span is active, should not throw
+        AerospikeClientHelper.enrichWithConnectionMetadata(new Object(), new Object());
+    }
+
+    // --- Bytecode safety tests ---
+
+    @Test
+    void syncAdviceDoesNotReferenceSemanticAttributes() throws Exception {
+        String className = AerospikeSyncAdvice.class.getName().replace('.', '/') + ".class";
+        byte[] bytecode;
+        try (java.io.InputStream is = AerospikeSyncAdvice.class.getClassLoader()
+                .getResourceAsStream(className)) {
+            assertThat(is).isNotNull();
+            bytecode = is.readAllBytes();
+        }
+        String bytecodeAsString = new String(bytecode, java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertThat(bytecodeAsString)
+                .doesNotContain("SemanticAttributes")
+                .doesNotContain("io/opentelemetry/semconv");
+    }
+
+    @Test
+    void asyncAdviceDoesNotReferenceSemanticAttributes() throws Exception {
+        String className = AerospikeAsyncAdvice.class.getName().replace('.', '/') + ".class";
+        byte[] bytecode;
+        try (java.io.InputStream is = AerospikeAsyncAdvice.class.getClassLoader()
+                .getResourceAsStream(className)) {
+            assertThat(is).isNotNull();
+            bytecode = is.readAllBytes();
+        }
+        String bytecodeAsString = new String(bytecode, java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertThat(bytecodeAsString)
+                .doesNotContain("SemanticAttributes")
+                .doesNotContain("io/opentelemetry/semconv");
+    }
+
+    // Test interfaces for proxy verification
+    interface SuccessCallback { void onSuccess(); }
+    interface FailureCallback { void onFailure(Throwable t); }
 }

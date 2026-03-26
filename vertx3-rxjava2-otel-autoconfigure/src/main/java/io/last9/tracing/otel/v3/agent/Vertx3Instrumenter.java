@@ -133,6 +133,16 @@ public final class Vertx3Instrumenter {
 
         log.info("Vertx3Instrumenter: bytecode instrumentation installed (Router, WebClient)");
 
+        // Netty pipeline: inject tracing handler when HttpServerCodec is added.
+        // Creates SERVER spans at the lowest possible level (Netty), matching the approach
+        // used by Datadog and OTel Java agents. Works even if requestHandler() is never called.
+        installNettyServerPipelineInstrumentation(inst, listener);
+
+        // HttpServer.requestHandler() — creates SERVER spans for ALL incoming HTTP requests,
+        // regardless of whether a Router is used. If the Netty handler already created a span,
+        // HttpServerAdviceHelper adopts it (manages scope only, no duplicate).
+        installHttpServerInstrumentation(inst, listener);
+
         // --- Raw client library instrumentation ---
         // These are registered separately because the classes may not be on the classpath
         // (they're optional dependencies). Each is wrapped in try-catch so a missing
@@ -150,6 +160,31 @@ public final class Vertx3Instrumenter {
         installLettuceInstrumentation(inst, listener);
         installNettyHttpClientInstrumentation(inst, listener);
         installSqsInstrumentation(inst, listener);
+    }
+
+    /**
+     * HttpServer: intercept {@code HttpServerImpl.requestHandler(Handler)} to wrap the handler
+     * with SERVER span creation. This creates SERVER spans for ALL incoming HTTP requests,
+     * regardless of whether a Vert.x Router is used.
+     */
+    private static void installHttpServerInstrumentation(Instrumentation inst,
+                                                          AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.vertx.core.http.impl.HttpServerImpl"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(HttpServerAdvice.class)
+                                    .on(named("requestHandler")
+                                            .and(takesArguments(1))
+                                            .and(takesArgument(0, named("io.vertx.core.Handler"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: HTTP server instrumentation installed (SERVER spans for all requests)");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: HTTP server instrumentation skipped: {}", t.getMessage());
+        }
     }
 
     /**
@@ -206,11 +241,17 @@ public final class Vertx3Instrumenter {
     }
 
     /**
-     * Aerospike: intercept single-key data methods on
-     * {@code com.aerospike.client.AerospikeClient} to create CLIENT spans.
+     * Aerospike: pattern-based instrumentation matching all public methods with a
+     * Policy-subclass first argument (sync) or listener second argument (async).
+     *
+     * <p>Same approach as Datadog: match by argument type pattern instead of listing
+     * specific method names. Automatically covers new API methods added in future
+     * Aerospike client versions.
      */
     private static void installAerospikeInstrumentation(Instrumentation inst,
                                                          AgentBuilder.Listener listener) {
+        // Sync: all public methods with Policy subclass as arg0
+        // Covers: get, put, delete, exists, operate, touch, scanAll, query, execute, etc.
         try {
             new AgentBuilder.Default()
                     .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -218,33 +259,72 @@ public final class Vertx3Instrumenter {
                     .disableClassFormatChanges()
                     .type(named("com.aerospike.client.AerospikeClient"))
                     .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                            builder.visit(Advice.to(AerospikeClientAdvice.class)
-                                    .on(namedOneOf("get", "put", "delete", "exists",
-                                            "operate", "touch", "append", "prepend",
-                                            "add", "getHeader", "execute")
+                            builder.visit(Advice.to(AerospikeSyncAdvice.class)
+                                    .on(isPublic()
+                                            .and(isMethod())
                                             .and(not(takesArguments(0)))
-                                            .and(takesArgument(1, named(
-                                                    "com.aerospike.client.Key"))))))
+                                            .and(takesArgument(0, nameStartsWith(
+                                                    "com.aerospike.client.policy"))))))
                     .installOn(inst);
-            // Batch operations: get(BatchPolicy, Key[]), exists(BatchPolicy, Key[]),
-            // getHeader(BatchPolicy, Key[])
-            // bulkGetBins() delegates to these batch methods.
+            log.info("Vertx3Instrumenter: Aerospike sync instrumentation installed (pattern-based)");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: Aerospike sync instrumentation skipped — "
+                    + "aerospike-client not on classpath: {}", t.getMessage());
+        }
+
+        // Async: all public methods with a listener as arg1
+        // Covers: async get, put, delete, exists, operate, etc.
+        try {
             new AgentBuilder.Default()
                     .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
                     .with(listener)
                     .disableClassFormatChanges()
                     .type(named("com.aerospike.client.AerospikeClient"))
                     .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                            builder.visit(Advice.to(AerospikeBatchAdvice.class)
-                                    .on(namedOneOf("get", "exists", "getHeader")
-                                            .and(not(takesArguments(0)))
-                                            .and(takesArgument(1, isArray())))))
+                            builder.visit(Advice.to(AerospikeAsyncAdvice.class)
+                                    .on(isPublic()
+                                            .and(isMethod())
+                                            .and(takesArgument(1, nameStartsWith(
+                                                    "com.aerospike.client.listener"))))))
                     .installOn(inst);
-
-            log.info("Vertx3Instrumenter: Aerospike client instrumentation installed (single-key + batch)");
+            log.info("Vertx3Instrumenter: Aerospike async instrumentation installed (listener wrapping)");
         } catch (Throwable t) {
-            log.warn("Vertx3Instrumenter: Aerospike instrumentation skipped — "
-                    + "aerospike-client not on classpath: {}", t.getMessage());
+            log.warn("Vertx3Instrumenter: Aerospike async instrumentation skipped: {}", t.getMessage());
+        }
+
+        // SyncCommand.execute() — catches ALL operations regardless of client class
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("com.aerospike.client.command.SyncCommand"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(AerospikeSyncCommandAdvice.class)
+                                    .on(named("execute").and(takesArguments(0)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Aerospike SyncCommand instrumentation installed (command-level)");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: Aerospike SyncCommand instrumentation skipped: {}", t.getMessage());
+        }
+
+        // Command.getNode() — enriches span with connection metadata (host, port, namespace)
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("com.aerospike.client.command.Command"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(AerospikeCommandNodeAdvice.class)
+                                    .on(named("getNode")
+                                            .and(takesArguments(2))
+                                            .and(returns(named(
+                                                    "com.aerospike.client.cluster.Node"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Aerospike connection metadata instrumentation installed");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: Aerospike connection metadata skipped: {}", t.getMessage());
         }
     }
 
@@ -307,7 +387,7 @@ public final class Vertx3Instrumenter {
      * to create SERVER spans for JAX-RS endpoints running on Vert.x.
      *
      * <p>This covers applications that use RESTEasy for business routes instead of
-     * the Vert.x Router (e.g., fantasy-tour-v1). The dispatch is synchronous, so
+     * the Vert.x Router directly. The dispatch is synchronous, so
      * the OTel context is current during the entire resource method execution.
      */
     private static void installResteasyInstrumentation(Instrumentation inst,
@@ -577,6 +657,35 @@ public final class Vertx3Instrumenter {
         } catch (Throwable t) {
             log.warn("Vertx3Instrumenter: AWS SQS SDK v2 instrumentation skipped — "
                     + "sqs SDK v2 not on classpath: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * Netty pipeline: intercept {@code DefaultChannelPipeline.addLast(String, ChannelHandler)}
+     * to inject {@link NettyServerTracingHandler} when {@code HttpServerCodec} is added.
+     *
+     * <p>This creates SERVER spans at the Netty level — the same approach used by Datadog
+     * and OTel Java agents. It serves as a safety net: even if
+     * {@code HttpServerImpl.requestHandler()} instrumentation fails (e.g., classpath conflict),
+     * the Netty handler still produces SERVER spans.
+     */
+    private static void installNettyServerPipelineInstrumentation(Instrumentation inst,
+                                                                    AgentBuilder.Listener listener) {
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.netty.channel.DefaultChannelPipeline"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(NettyServerPipelineAdvice.class)
+                                    .on(named("addLast")
+                                            .and(takesArguments(2))
+                                            .and(takesArgument(0, String.class)))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Netty pipeline instrumentation installed (SERVER spans via Netty)");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: Netty pipeline instrumentation skipped: {}", t.getMessage());
         }
     }
 }

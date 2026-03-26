@@ -1,14 +1,14 @@
 package io.last9.tracing.otel.v3.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -122,18 +122,18 @@ public final class ReactiveSqlHelper {
 
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
-                .setAttribute(SemanticAttributes.DB_SYSTEM, dbSystem)
-                .setAttribute(SemanticAttributes.DB_STATEMENT, sql)
+                .setAttribute("db.system", dbSystem)
+                .setAttribute("db.statement", sql)
                 .startSpan();
 
         if (dbName != null) {
-            span.setAttribute(SemanticAttributes.DB_NAME, dbName);
+            span.setAttribute("db.name", dbName);
         }
         if (host != null) {
-            span.setAttribute(SemanticAttributes.NET_PEER_NAME, host);
+            span.setAttribute("net.peer.name", host);
         }
         if (port > 0) {
-            span.setAttribute(SemanticAttributes.NET_PEER_PORT, (long) port);
+            span.setAttribute("net.peer.port", (long) port);
         }
 
         return span;
@@ -147,7 +147,7 @@ public final class ReactiveSqlHelper {
         try {
             if (thrown != null) {
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             }
         } finally {

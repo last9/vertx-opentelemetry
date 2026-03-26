@@ -1,6 +1,7 @@
 package io.last9.tracing.otel.v3.agent;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
@@ -9,8 +10,7 @@ import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapSetter;
-import io.opentelemetry.semconv.ExceptionAttributes;
-import io.opentelemetry.semconv.SemanticAttributes;
+
 
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -81,15 +81,15 @@ public final class NettyHttpClientHelper {
 
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
-                .setAttribute(SemanticAttributes.HTTP_METHOD, method)
-                .setAttribute(SemanticAttributes.NET_PEER_NAME, host != null ? host : "unknown")
+                .setAttribute("http.method", method)
+                .setAttribute("net.peer.name", host != null ? host : "unknown")
                 .startSpan();
 
         if (uri != null) {
-            span.setAttribute(SemanticAttributes.HTTP_URL, buildUrl(host, port, uri));
+            span.setAttribute("http.url", buildUrl(host, port, uri));
         }
         if (port > 0) {
-            span.setAttribute(SemanticAttributes.NET_PEER_PORT, (long) port);
+            span.setAttribute("net.peer.port", (long) port);
         }
 
         // Inject traceparent header for cross-service propagation
@@ -124,7 +124,7 @@ public final class NettyHttpClientHelper {
                 // end() itself failed — response will never arrive, end span now
                 IN_FLIGHT.remove(System.identityHashCode(request));
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
                 span.end();
             }
@@ -147,7 +147,7 @@ public final class NettyHttpClientHelper {
         try {
             int statusCode = extractStatusCode(response);
             if (statusCode > 0) {
-                span.setAttribute(SemanticAttributes.HTTP_STATUS_CODE, (long) statusCode);
+                span.setAttribute("http.status_code", (long) statusCode);
                 if (statusCode >= 400) {
                     span.setStatus(StatusCode.ERROR, "HTTP " + statusCode);
                 }
@@ -171,7 +171,7 @@ public final class NettyHttpClientHelper {
         try {
             if (thrown != null) {
                 span.recordException(thrown,
-                        Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
                 span.setStatus(StatusCode.ERROR, thrown.getMessage());
             }
         } finally {

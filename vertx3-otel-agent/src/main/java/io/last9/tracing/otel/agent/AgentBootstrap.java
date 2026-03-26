@@ -104,6 +104,10 @@ public final class AgentBootstrap {
             // 4. Initialize OTel SDK + RxJava hooks on the app classloader
             initializeOnAppClassLoader();
 
+            // 5. Post-hoc diagnostic: detect classpath conflicts that may have already
+            //    broken initialization. Cannot prevent the issue, only make it visible.
+            checkClasspathConflicts();
+
             log("[Last9 OTel Agent] Zero-code instrumentation installed successfully");
         } catch (Exception e) {
             log("[Last9 OTel Agent] Failed to install instrumentation: " + e.getMessage());
@@ -204,6 +208,62 @@ public final class AgentBootstrap {
         instrumenter.getMethod("installTransformersOnly", Instrumentation.class)
                 .invoke(null, inst);
         log("[Last9 OTel Agent] ByteBuddy class transformers installed");
+    }
+
+    /**
+     * Detects if the application's classpath contains an older version of
+     * vertx3-rxjava2-otel-autoconfigure that would shadow the agent's shaded classes.
+     *
+     * <p>When both the library (as a Maven dependency) and the agent are present,
+     * {@code appendToSystemClassLoaderSearch} puts the agent's classes LAST. The app's
+     * older/unshaded classes win the race, causing:
+     * <ul>
+     *   <li>Helpers that reference unshaded {@code io.opentelemetry.*} while the SDK
+     *       was initialized on shaded {@code io.last9.internal.otel.*}</li>
+     *   <li>Stale helper code that still uses {@code SemanticAttributes} constants</li>
+     * </ul>
+     */
+    private static void checkClasspathConflicts() {
+        try {
+            ClassLoader appCL = ClassLoader.getSystemClassLoader();
+
+            // Check if the helper class exists and has the version marker
+            Class<?> helper = appCL.loadClass(
+                    "io.last9.tracing.otel.v3.agent.HttpServerAdviceHelper");
+
+            // Check where the class was loaded from
+            java.security.CodeSource cs = helper.getProtectionDomain().getCodeSource();
+            String source = cs != null ? cs.getLocation().toString() : "unknown";
+            log("[Last9 OTel Agent] HttpServerAdviceHelper loaded from: " + source);
+
+            // Check for version marker (added in beta.8)
+            try {
+                String version = (String) helper.getField("HELPER_VERSION").get(null);
+                log("[Last9 OTel Agent] HttpServerAdviceHelper version: " + version);
+            } catch (NoSuchFieldException e) {
+                // No HELPER_VERSION field — this is a pre-beta.8 class from the app's classpath
+                log("[Last9 OTel Agent] WARNING: HttpServerAdviceHelper is missing version marker — "
+                        + "loaded from app's classpath (not the agent). This means the app bundles an "
+                        + "older version of io.last9:vertx3-rxjava2-otel-autoconfigure that shadows "
+                        + "the agent's classes. SERVER spans may not work correctly. "
+                        + "Fix: remove the io.last9:vertx3-rxjava2-otel-autoconfigure dependency from "
+                        + "your pom.xml — the agent is fully self-contained.");
+            }
+
+            // Check if the unshaded GlobalOpenTelemetry class exists on the classpath.
+            // Use getResource() instead of loadClass() to avoid triggering static initializers
+            // which could interact with the already-initialized shaded SDK.
+            boolean unshadedOtelPresent = appCL.getResource(
+                    "io/opentelemetry/api/GlobalOpenTelemetry.class") != null;
+            if (unshadedOtelPresent) {
+                log("[Last9 OTel Agent] NOTE: Unshaded io.opentelemetry.api.GlobalOpenTelemetry found on classpath. "
+                        + "If the app bundles its own OTel SDK, the agent's shaded SDK is isolated and "
+                        + "will not conflict. However, if the app also bundles vertx3-rxjava2-otel-autoconfigure "
+                        + "(pre-beta.7), helpers will use the wrong GlobalOpenTelemetry.");
+            }
+        } catch (Throwable t) {
+            log("[Last9 OTel Agent] Classpath check failed: " + t.getMessage());
+        }
     }
 
     /**

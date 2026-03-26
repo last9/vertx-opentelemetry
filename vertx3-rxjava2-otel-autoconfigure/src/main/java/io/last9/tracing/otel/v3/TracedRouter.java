@@ -153,53 +153,67 @@ public final class TracedRouter {
         Tracer tracer = openTelemetry.getTracer(TRACER_NAME);
         TextMapPropagator propagator = openTelemetry.getPropagators().getTextMapPropagator();
 
-        // High-priority handler: create spans for every request
+        // High-priority handler: create or adopt spans for every request
         router.route().order(-1000).handler(ctx -> {
             HttpServerRequest request = ctx.request();
             String method = request.method().name();
             String path = request.path();
 
-            // 1. Extract parent context from incoming W3C traceparent header.
-            //    IMPORTANT: Use Context.root() — NOT Context.current() — as the base.
-            //    Vert.x 3 runs all handlers on a single event-loop thread. If any prior
-            //    request's scope leaked into the thread-local (or a handler forgot to close
-            //    a scope), Context.current() would still hold the previous request's span,
-            //    causing this new SERVER span to parent under the old one. Using root()
-            //    ensures each incoming HTTP request starts a fresh trace (unless the caller
-            //    sends a valid traceparent header, which extract() will honour).
-            Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
+            // Check if HttpServerAdvice already created a SERVER span for this request.
+            // If so, adopt it (add route info) instead of creating a duplicate.
+            Span existingSpan = Span.current();
+            boolean spanFromHttpServer = existingSpan.getSpanContext().isValid();
 
-            // 2. Start a SERVER span
-            String hostHeader = request.host();
-            String serverAddr = hostHeader;
-            long serverPort = -1;
-            if (hostHeader != null && hostHeader.contains(":")) {
-                int idx = hostHeader.lastIndexOf(':');
-                serverAddr = hostHeader.substring(0, idx);
-                try {
-                    serverPort = Long.parseLong(hostHeader.substring(idx + 1));
-                } catch (NumberFormatException ignored) {
-                    // keep serverPort as -1
+            Span span;
+            Context otelContext;
+
+            if (spanFromHttpServer) {
+                // HttpServerAdvice already created the SERVER span — adopt it.
+                // We just need to add route-pattern info via headersEndHandler.
+                span = existingSpan;
+                otelContext = Context.current();
+            } else {
+                // No existing span — create a new SERVER span (standalone Router usage
+                // without HttpServerAdvice, e.g., manual TracedRouter.create()).
+                Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
+
+                String hostHeader = request.host();
+                String serverAddr = hostHeader;
+                long serverPort = -1;
+                if (hostHeader != null && hostHeader.contains(":")) {
+                    int idx = hostHeader.lastIndexOf(':');
+                    serverAddr = hostHeader.substring(0, idx);
+                    try {
+                        serverPort = Long.parseLong(hostHeader.substring(idx + 1));
+                    } catch (NumberFormatException ignored) {
+                        // keep serverPort as -1
+                    }
                 }
-            }
 
-            Span span = tracer.spanBuilder(method + " " + path)
-                    .setParent(parentContext)
-                    .setSpanKind(SpanKind.SERVER)
-                    .setAttribute(SemanticAttributes.HTTP_REQUEST_METHOD, method)
-                    .setAttribute(SemanticAttributes.URL_PATH, path)
-                    .setAttribute(SemanticAttributes.URL_SCHEME,
-                            request.isSSL() ? "https" : "http")
-                    .setAttribute(SemanticAttributes.SERVER_ADDRESS, serverAddr)
-                    .startSpan();
+                span = tracer.spanBuilder(method + " " + path)
+                        .setParent(parentContext)
+                        .setSpanKind(SpanKind.SERVER)
+                        .setAttribute(SemanticAttributes.HTTP_REQUEST_METHOD, method)
+                        .setAttribute(SemanticAttributes.URL_PATH, path)
+                        .setAttribute(SemanticAttributes.URL_SCHEME,
+                                request.isSSL() ? "https" : "http")
+                        .setAttribute(SemanticAttributes.SERVER_ADDRESS, serverAddr)
+                        .startSpan();
 
-            if (serverPort > 0) {
-                span.setAttribute(SemanticAttributes.SERVER_PORT, serverPort);
+                if (serverPort > 0) {
+                    span.setAttribute(SemanticAttributes.SERVER_PORT, serverPort);
+                }
+
+                otelContext = parentContext.with(span);
+
+                // End span when response body is fully sent (only for spans we created)
+                ctx.response().bodyEndHandler(v -> span.end());
             }
 
             ctx.put(SPAN_KEY, span);
 
-            // 3. Update span with response details when headers are sent
+            // Update span with route pattern and response details when headers are sent.
+            // This runs for both adopted and created spans — adding route info either way.
             ctx.response().headersEndHandler(v -> {
                 String route = ctx.get(ROUTE_KEY);
                 if (route == null) {
@@ -221,24 +235,7 @@ public final class TracedRouter {
                 }
             });
 
-            // 4. End span when response body is fully sent
-            ctx.response().bodyEndHandler(v -> span.end());
-
-            // 5. Build the OTel context containing the new span
-            Context otelContext = parentContext.with(span);
-
-            // 6. Make the OTel context current and proceed to the next handler.
-            //    Do NOT use request.bodyHandler() here — it consumes the request body,
-            //    which conflicts with applications that use BodyHandler or read the body
-            //    themselves (e.g., context.getBodyAsJson()). If both our bodyHandler and
-            //    the app's BodyHandler are registered, one of them never fires, causing
-            //    either ctx.next() to never be called ("Empty reply from server") or
-            //    the app to receive an empty body.
-            //
-            //    The scope closes when ctx.next() returns (before async handlers run),
-            //    so Span.current() won't work in async handler code. But the span is
-            //    stored on the RoutingContext and ends via bodyEndHandler — trace
-            //    correlation in logs still works via the MDC filter.
+            // Make the OTel context current and proceed to the next handler.
             try (Scope ignored = otelContext.makeCurrent()) {
                 ctx.next();
             }
