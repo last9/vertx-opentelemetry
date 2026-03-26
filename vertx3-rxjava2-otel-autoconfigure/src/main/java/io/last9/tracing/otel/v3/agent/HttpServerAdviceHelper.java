@@ -41,7 +41,7 @@ public final class HttpServerAdviceHelper {
      * If the app bundles an older version of this class, the version won't match
      * the agent's expected version, revealing a classpath shadowing issue.
      */
-    public static final String HELPER_VERSION = "2.2.3-beta.8";
+    public static final String HELPER_VERSION = "2.2.3-beta.9";
 
     /**
      * Track wrapped handlers to avoid double-wrapping when requestHandler()
