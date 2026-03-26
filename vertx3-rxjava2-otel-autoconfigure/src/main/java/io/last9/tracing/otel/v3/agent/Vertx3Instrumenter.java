@@ -692,6 +692,8 @@ public final class Vertx3Instrumenter {
      */
     private static void installNettyServerPipelineInstrumentation(Instrumentation inst,
                                                                     AgentBuilder.Listener listener) {
+        // Intercept ALL pipeline add methods (addLast, addFirst, addBefore, addAfter, replace)
+        // matching the OTel Java agent approach. The last argument is always the ChannelHandler.
         try {
             new AgentBuilder.Default()
                     .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -699,33 +701,36 @@ public final class Vertx3Instrumenter {
                     .disableClassFormatChanges()
                     .type(named("io.netty.channel.DefaultChannelPipeline"))
                     .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                            builder.visit(Advice.to(NettyServerPipelineAdvice.class)
-                                    .on(named("addLast")
-                                            .and(takesArguments(2))
-                                            .and(takesArgument(0, String.class)))))
+                            builder
+                                    // addLast(String, ChannelHandler)
+                                    .visit(Advice.to(NettyServerPipelineAdvice.class)
+                                            .on(named("addLast")
+                                                    .and(takesArguments(2))
+                                                    .and(takesArgument(1, named("io.netty.channel.ChannelHandler")))))
+                                    // addFirst(String, ChannelHandler)
+                                    .visit(Advice.to(NettyServerPipelineAdvice.class)
+                                            .on(named("addFirst")
+                                                    .and(takesArguments(2))
+                                                    .and(takesArgument(1, named("io.netty.channel.ChannelHandler")))))
+                                    // addBefore(String, String, ChannelHandler)
+                                    .visit(Advice.to(NettyServerPipelineBeforeAdvice.class)
+                                            .on(named("addBefore")
+                                                    .and(takesArguments(3))
+                                                    .and(takesArgument(2, named("io.netty.channel.ChannelHandler")))))
+                                    // addAfter(String, String, ChannelHandler)
+                                    .visit(Advice.to(NettyServerPipelineBeforeAdvice.class)
+                                            .on(named("addAfter")
+                                                    .and(takesArguments(3))
+                                                    .and(takesArgument(2, named("io.netty.channel.ChannelHandler")))))
+                                    // replace(String, String, ChannelHandler)
+                                    .visit(Advice.to(NettyServerPipelineBeforeAdvice.class)
+                                            .on(named("replace")
+                                                    .and(takesArguments(3))
+                                                    .and(takesArgument(2, named("io.netty.channel.ChannelHandler"))))))
                     .installOn(inst);
-            log.info("Vertx3Instrumenter: Netty pipeline instrumentation installed (SERVER spans via Netty)");
+            log.info("Vertx3Instrumenter: Netty pipeline instrumentation installed (all add/replace methods)");
         } catch (Throwable t) {
             log.warn("Vertx3Instrumenter: Netty pipeline instrumentation skipped: {}", t.getMessage());
-        }
-
-        // addBefore — Vert.x uses addBefore("handler", "codec", new HttpServerCodec(...))
-        // to set up the HTTP pipeline, not addLast.
-        try {
-            new AgentBuilder.Default()
-                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
-                    .with(listener)
-                    .disableClassFormatChanges()
-                    .type(named("io.netty.channel.DefaultChannelPipeline"))
-                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                            builder.visit(Advice.to(NettyServerPipelineBeforeAdvice.class)
-                                    .on(named("addBefore")
-                                            .and(takesArguments(3))
-                                            .and(takesArgument(2, named("io.netty.channel.ChannelHandler"))))))
-                    .installOn(inst);
-            log.info("Vertx3Instrumenter: Netty pipeline addBefore instrumentation installed");
-        } catch (Throwable t) {
-            log.warn("Vertx3Instrumenter: Netty pipeline addBefore skipped: {}", t.getMessage());
         }
     }
 }

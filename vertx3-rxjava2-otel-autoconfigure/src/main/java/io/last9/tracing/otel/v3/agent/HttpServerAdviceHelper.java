@@ -165,19 +165,15 @@ public final class HttpServerAdviceHelper {
             @Override
             public void handle(HttpServerRequest request) {
 
-                // Check if Netty-level instrumentation already created a SERVER span.
-                // If so, adopt it (manage scope only) — don't create a duplicate.
-                Span nettySpan = NettyServerTracingHandler.NETTY_SERVER_SPAN.get();
-                if (nettySpan != null && nettySpan.getSpanContext().isValid()) {
-                    NettyServerTracingHandler.NETTY_SERVER_SPAN.remove();
-                    // Enrich the Netty span with Vert.x-level attributes
-                    nettySpan.setAttribute("url.scheme", request.isSSL() ? "https" : "http");
-                    // Make Netty span current within this handler scope, then delegate.
-                    // Netty handler manages span lifecycle (end on response write).
-                    Context otelContext = Context.root().with(nettySpan);
-                    try (Scope ignored = otelContext.makeCurrent()) {
-                        original.handle(request);
-                    }
+                // Deduplication: if a SERVER span already exists (from Netty pipeline
+                // handler or another interceptor), adopt it instead of creating a duplicate.
+                // The Netty RequestHandler makes the span current via scope during channelRead.
+                Span existingSpan = Span.current();
+                if (existingSpan.getSpanContext().isValid()) {
+                    // Enrich the existing span with Vert.x-level attributes
+                    existingSpan.setAttribute("url.scheme", request.isSSL() ? "https" : "http");
+                    // Span lifecycle is managed by whoever created it (Netty handler)
+                    original.handle(request);
                     return;
                 }
 

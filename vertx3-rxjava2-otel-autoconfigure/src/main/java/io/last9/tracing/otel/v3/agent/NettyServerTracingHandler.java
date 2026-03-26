@@ -9,6 +9,7 @@ import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpRequestDecoder;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseEncoder;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.util.AttributeKey;
@@ -18,29 +19,37 @@ import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Netty pipeline tracing for HTTP servers — same architecture as the OTel Java agent.
+ * Netty pipeline tracing for HTTP servers — architecture matches the OTel Java agent.
  *
- * <p>Two separate handlers are injected into the pipeline:
+ * <h2>Handler architecture</h2>
  * <ul>
- *   <li>{@link RequestHandler} (inbound) — after {@code HttpRequestDecoder} or {@code HttpServerCodec}.
- *       Creates SERVER span on {@code channelRead(HttpRequest)}.</li>
- *   <li>{@link ResponseHandler} (outbound) — after {@code HttpResponseEncoder} or {@code HttpServerCodec}.
- *       Ends SERVER span on {@code write(LastHttpContent)}.</li>
+ *   <li>{@link RequestHandler} (inbound) — after {@code HttpRequestDecoder}/{@code HttpServerCodec}.
+ *       Creates SERVER span, makes it current via OTel scope for downstream handlers.</li>
+ *   <li>{@link ResponseHandler} (outbound) — after {@code HttpResponseEncoder}/{@code HttpServerCodec}.
+ *       Sets response attributes, ends span on {@code LastHttpContent} write.</li>
  * </ul>
  *
- * <p>Vert.x 3.9.x uses separate {@code VertxHttpRequestDecoder} + {@code VertxHttpResponseEncoder}
- * instead of the combined {@code HttpServerCodec}. Both patterns are detected.
+ * <h2>Deduplication</h2>
+ * <p>Before creating a span, checks if a SERVER span already exists in the current
+ * context (via {@code Span.current()}). This prevents duplicate spans when both
+ * Netty and Vert.x-level (HttpServerAdvice/TracedRouter) instrumentation are active.
  *
- * <p>The outbound handler MUST be positioned after the encoder so it sees decoded
- * {@code HttpResponse}/{@code LastHttpContent} objects, not raw {@code ByteBuf}.
- * Vert.x writes via {@code ChannelHandlerContext.write()} from the VertxHandler position;
- * the write flows backward through the pipeline and hits our handler before the encoder.
+ * <h2>Context propagation</h2>
+ * <p>Stores the full OTel {@link Context} (not just Span) in a Netty channel attribute.
+ * Makes the context current during {@code channelRead} so downstream handlers
+ * (Router, user code) see the span via {@code Span.current()}.
+ *
+ * <h2>Codec detection</h2>
+ * <p>Detects {@code HttpServerCodec} (combined), {@code HttpRequestDecoder} (Vert.x 3.9.x
+ * uses {@code VertxHttpRequestDecoder}), and {@code HttpResponseEncoder} (Vert.x 3.9.x
+ * uses {@code VertxHttpResponseEncoder}).
  */
 public final class NettyServerTracingHandler {
 
@@ -49,10 +58,13 @@ public final class NettyServerTracingHandler {
     private static final String REQUEST_HANDLER_NAME = "last9-http-server-request";
     private static final String RESPONSE_HANDLER_NAME = "last9-http-server-response";
 
-    public static final ThreadLocal<Span> NETTY_SERVER_SPAN = new ThreadLocal<>();
+    /** Full OTel context for the in-flight request (includes span + baggage). */
+    private static final AttributeKey<Context> SERVER_CONTEXT_KEY =
+            AttributeKey.valueOf("last9.http.server.context");
 
-    private static final AttributeKey<Span> SERVER_SPAN_KEY =
-            AttributeKey.valueOf("last9.http.server.span");
+    /** HTTP response stored when headers arrive (for chunked responses). */
+    private static final AttributeKey<HttpResponse> SERVER_RESPONSE_KEY =
+            AttributeKey.valueOf("last9.http.server.response");
 
     private static final TextMapGetter<HttpRequest> HEADER_GETTER = new TextMapGetter<HttpRequest>() {
         @Override
@@ -68,30 +80,57 @@ public final class NettyServerTracingHandler {
 
     private NettyServerTracingHandler() {}
 
+    // ---- Pipeline injection ----
+
     /**
-     * Called from pipeline advices. Detects HTTP codec handlers and injects
-     * the appropriate tracing handler.
+     * Called from pipeline advices (addLast, addBefore, addFirst, addAfter, replace).
+     * Detects HTTP codec handlers and injects the appropriate tracing handler.
      */
     public static void maybeInject(Object handler, Object pipeline) {
         try {
             if (!(pipeline instanceof ChannelPipeline)) return;
             ChannelPipeline p = (ChannelPipeline) pipeline;
-            String handlerName = p.context((io.netty.channel.ChannelHandler) handler).name();
+
+            io.netty.channel.ChannelHandlerContext handlerCtx =
+                    p.context((io.netty.channel.ChannelHandler) handler);
+            if (handlerCtx == null) return; // handler not in pipeline (removed?)
+            String handlerName = handlerCtx.name();
 
             if (handler instanceof HttpServerCodec) {
-                // Combined codec — inject both request and response handlers after it
                 injectRequestHandler(p, handlerName);
                 injectResponseHandler(p, handlerName);
             } else if (handler instanceof HttpRequestDecoder) {
-                // Separate decoder (Vert.x 3.9.x VertxHttpRequestDecoder)
                 injectRequestHandler(p, handlerName);
             } else if (handler instanceof HttpResponseEncoder) {
-                // Separate encoder (Vert.x 3.9.x VertxHttpResponseEncoder)
                 injectResponseHandler(p, handlerName);
             }
+        } catch (IllegalArgumentException e) {
+            // Handler with same name already exists — safe to ignore
         } catch (Throwable t) {
             log.warn("NettyServerTracingHandler: failed to inject: {}", t.getMessage());
         }
+    }
+
+    /**
+     * Called when a codec handler is removed from the pipeline.
+     * Removes associated tracing handlers to prevent orphans.
+     */
+    public static void maybeRemove(Object handler, Object pipeline) {
+        try {
+            if (!(pipeline instanceof ChannelPipeline)) return;
+            ChannelPipeline p = (ChannelPipeline) pipeline;
+
+            if (handler instanceof HttpServerCodec || handler instanceof HttpRequestDecoder) {
+                if (p.get(REQUEST_HANDLER_NAME) != null) {
+                    p.remove(REQUEST_HANDLER_NAME);
+                }
+            }
+            if (handler instanceof HttpServerCodec || handler instanceof HttpResponseEncoder) {
+                if (p.get(RESPONSE_HANDLER_NAME) != null) {
+                    p.remove(RESPONSE_HANDLER_NAME);
+                }
+            }
+        } catch (Throwable ignored) {}
     }
 
     private static void injectRequestHandler(ChannelPipeline p, String afterName) {
@@ -106,52 +145,131 @@ public final class NettyServerTracingHandler {
         log.info("NettyServerTracingHandler: response handler injected after {}", afterName);
     }
 
+    // ---- Inbound handler (request) ----
+
     /**
-     * Inbound handler — creates SERVER span when HTTP request arrives.
+     * Creates SERVER span on HTTP request arrival. Makes the OTel context current
+     * during {@code channelRead} so downstream handlers see the span.
      */
     static final class RequestHandler extends ChannelInboundHandlerAdapter {
 
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
             if (msg instanceof HttpRequest) {
-                startServerSpan(ctx, (HttpRequest) msg);
+                Context otelContext = startServerSpan(ctx, (HttpRequest) msg);
+                if (otelContext != null) {
+                    // Make span current for downstream handlers (Router, user code)
+                    try (Scope ignored = otelContext.makeCurrent()) {
+                        super.channelRead(ctx, msg);
+                    } catch (Throwable t) {
+                        endServerSpan(ctx, t);
+                        throw t;
+                    }
+                    return;
+                }
             }
             super.channelRead(ctx, msg);
         }
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-            endServerSpan(ctx);
+            endServerSpan(ctx, null);
             super.channelInactive(ctx);
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+            // Record exception on span but don't end it — response write will end it
+            Context otelContext = ctx.channel().attr(SERVER_CONTEXT_KEY).get();
+            if (otelContext != null) {
+                Span span = Span.fromContext(otelContext);
+                if (span.isRecording()) {
+                    span.recordException(cause);
+                    span.setStatus(StatusCode.ERROR, cause.getMessage());
+                }
+            }
+            super.exceptionCaught(ctx, cause);
         }
     }
 
+    // ---- Outbound handler (response) ----
+
     /**
-     * Outbound handler — ends SERVER span when HTTP response is written.
-     * Positioned after the encoder so it sees HttpResponse/LastHttpContent,
-     * not raw ByteBuf.
+     * Ends SERVER span when HTTP response is written. Positioned after the encoder
+     * so it sees {@code HttpResponse}/{@code LastHttpContent}, not raw {@code ByteBuf}.
      */
     static final class ResponseHandler extends ChannelOutboundHandlerAdapter {
 
         @Override
         public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise)
                 throws Exception {
-            System.err.println("[Last9 OTel Agent] ResponseHandler.write: " + msg.getClass().getName());
+            Context otelContext = ctx.channel().attr(SERVER_CONTEXT_KEY).get();
+
             if (msg instanceof HttpResponse) {
-                setResponseStatus(ctx, (HttpResponse) msg);
+                HttpResponse response = (HttpResponse) msg;
+                // Skip WebSocket upgrade (101) — connection continues, don't end span here
+                if (response.status().equals(HttpResponseStatus.SWITCHING_PROTOCOLS)) {
+                    ctx.channel().attr(SERVER_CONTEXT_KEY).set(null);
+                    super.write(ctx, msg, promise);
+                    return;
+                }
+                setResponseStatus(otelContext, response);
+                // Store response for chunked case (headers come before body)
+                ctx.channel().attr(SERVER_RESPONSE_KEY).set(response);
             }
+
             if (msg instanceof LastHttpContent) {
-                // End span immediately — VoidChannelPromise doesn't support listeners
-                endServerSpan(ctx);
+                // End span. Use new promise if void to avoid silent listener failure.
+                if (otelContext != null) {
+                    Span span = Span.fromContext(otelContext);
+                    if (span.isRecording()) {
+                        if (promise.isVoid()) {
+                            // VoidChannelPromise ignores listeners — end immediately
+                            endServerSpan(ctx, null);
+                        } else {
+                            // End span after write completes (captures write failures)
+                            promise.addListener(future -> {
+                                if (!future.isSuccess()) {
+                                    span.setStatus(StatusCode.ERROR, "Write failed");
+                                    if (future.cause() != null) {
+                                        span.recordException(future.cause());
+                                    }
+                                }
+                                endServerSpan(ctx, null);
+                            });
+                        }
+                    }
+                }
             }
-            super.write(ctx, msg, promise);
+
+            // Make context current during write so downstream sees the span
+            if (otelContext != null) {
+                try (Scope ignored = otelContext.makeCurrent()) {
+                    super.write(ctx, msg, promise);
+                }
+            } else {
+                super.write(ctx, msg, promise);
+            }
         }
     }
 
-    // --- Shared span lifecycle methods ---
+    // ---- Shared span lifecycle ----
 
-    private static void startServerSpan(ChannelHandlerContext ctx, HttpRequest request) {
+    /**
+     * Creates a SERVER span if none exists in the current context (dedup check).
+     * Returns the OTel context with the span, or null if suppressed.
+     */
+    private static Context startServerSpan(ChannelHandlerContext ctx, HttpRequest request) {
         try {
+            // Deduplication: if a SERVER span already exists, skip creation.
+            // This prevents duplicates when both Netty and Vert.x-level tracing fire.
+            Span existing = Span.current();
+            if (existing.getSpanContext().isValid()
+                    && existing.getSpanContext().isRemote() == false) {
+                // A local span is already active — don't create another
+                return null;
+            }
+
             Tracer tracer = GlobalOpenTelemetry.getTracer(TRACER_NAME);
             TextMapPropagator propagator = GlobalOpenTelemetry.getPropagators().getTextMapPropagator();
 
@@ -159,6 +277,7 @@ public final class NettyServerTracingHandler {
             String uri = request.uri();
             String path = uri.contains("?") ? uri.substring(0, uri.indexOf('?')) : uri;
 
+            // Extract parent context from traceparent headers
             Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
 
             Span span = tracer.spanBuilder(method + " " + path)
@@ -168,6 +287,7 @@ public final class NettyServerTracingHandler {
                     .setAttribute("url.path", path)
                     .startSpan();
 
+            // Parse Host header
             String host = request.headers().get("Host");
             if (host != null) {
                 String serverAddr = host;
@@ -183,17 +303,21 @@ public final class NettyServerTracingHandler {
                 span.setAttribute("server.address", serverAddr);
             }
 
-            ctx.channel().attr(SERVER_SPAN_KEY).set(span);
-            NETTY_SERVER_SPAN.set(span);
+            // Store full Context (not just Span) in channel attribute
+            Context otelContext = parentContext.with(span);
+            ctx.channel().attr(SERVER_CONTEXT_KEY).set(otelContext);
+
+            return otelContext;
         } catch (Throwable t) {
             log.warn("NettyServerTracingHandler: failed to start span: {}", t.getMessage());
+            return null;
         }
     }
 
-    private static void setResponseStatus(ChannelHandlerContext ctx, HttpResponse response) {
-        Span span = ctx.channel().attr(SERVER_SPAN_KEY).get();
-        if (span == null) return;
+    private static void setResponseStatus(Context otelContext, HttpResponse response) {
+        if (otelContext == null) return;
         try {
+            Span span = Span.fromContext(otelContext);
             int statusCode = response.status().code();
             span.setAttribute(
                     io.opentelemetry.api.common.AttributeKey.longKey("http.response.status_code"),
@@ -206,12 +330,17 @@ public final class NettyServerTracingHandler {
         }
     }
 
-    private static void endServerSpan(ChannelHandlerContext ctx) {
-        Span span = ctx.channel().attr(SERVER_SPAN_KEY).getAndSet(null);
-        if (span == null) return;
+    private static void endServerSpan(ChannelHandlerContext ctx, Throwable error) {
+        Context otelContext = ctx.channel().attr(SERVER_CONTEXT_KEY).getAndSet(null);
+        ctx.channel().attr(SERVER_RESPONSE_KEY).set(null);
+        if (otelContext == null) return;
         try {
+            Span span = Span.fromContext(otelContext);
+            if (error != null) {
+                span.recordException(error);
+                span.setStatus(StatusCode.ERROR, error.getMessage());
+            }
             span.end();
-            NETTY_SERVER_SPAN.remove();
         } catch (Throwable t) {
             log.warn("NettyServerTracingHandler: failed to end span: {}", t.getMessage());
         }
