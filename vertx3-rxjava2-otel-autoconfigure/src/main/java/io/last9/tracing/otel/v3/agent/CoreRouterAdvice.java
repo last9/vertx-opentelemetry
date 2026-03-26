@@ -11,8 +11,16 @@ import net.bytebuddy.implementation.bytecode.assign.Assigner;
  */
 public class CoreRouterAdvice {
 
-    @Advice.OnMethodExit(suppress = Throwable.class)
+    @Advice.OnMethodExit
     static void onExit(@Advice.Return(typing = Assigner.Typing.DYNAMIC) Object router) {
-        CoreRouterAdviceHelper.instrumentIfNeeded(router);
+        try {
+            System.err.println("[Last9 OTel Agent] CoreRouterAdvice.onExit fired — router: "
+                    + (router != null ? router.getClass().getName() : "null"));
+            CoreRouterAdviceHelper.instrumentIfNeeded(router);
+        } catch (Throwable t) {
+            System.err.println("[Last9 OTel Agent] CoreRouterAdvice.onExit FAILED: "
+                    + t.getClass().getName() + ": " + t.getMessage());
+            t.printStackTrace(System.err);
+        }
     }
 }
