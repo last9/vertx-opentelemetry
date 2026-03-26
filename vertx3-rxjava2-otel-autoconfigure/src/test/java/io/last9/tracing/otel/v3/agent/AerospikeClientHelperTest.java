@@ -139,4 +139,100 @@ class AerospikeClientHelperTest {
         assertThat(sd.getStatus().getStatusCode()).isNotEqualTo(StatusCode.ERROR);
         assertThat(sd.getEvents()).isEmpty();
     }
+
+    // --- startSpanFromArgs tests (pattern-based matching) ---
+
+    @Test
+    void startSpanFromArgs_findsKeyInArgs() {
+        Key key = new Key("ns1", "set1", "k1");
+        Object[] args = {new Object(), key, "extra"};
+        Span span = AerospikeClientHelper.startSpanFromArgs("GET", args);
+
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).isEqualTo("aerospike GET ns1.set1");
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("db.name"))).isEqualTo("ns1");
+    }
+
+    @Test
+    void startSpanFromArgs_findsKeyArrayInArgs() {
+        Key[] keys = {new Key("ns1", "set1", "k1"), new Key("ns1", "set1", "k2")};
+        Object[] args = {new Object(), keys};
+        Span span = AerospikeClientHelper.startSpanFromArgs("GET", args);
+
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).isEqualTo("aerospike GET (2 keys)");
+    }
+
+    @Test
+    void startSpanFromArgs_noKeyInArgs() {
+        Object[] args = {new Object(), "namespace", "setName"};
+        Span span = AerospikeClientHelper.startSpanFromArgs("SCAN_ALL", args);
+
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).isEqualTo("aerospike SCAN_ALL");
+    }
+
+    @Test
+    void startSpanFromArgs_nullArgs() {
+        Span span = AerospikeClientHelper.startSpanFromArgs("QUERY", null);
+
+        assertThat(span).isNotNull();
+        span.end();
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getName()).isEqualTo("aerospike QUERY");
+    }
+
+    // --- wrapAsyncListener tests ---
+
+    @Test
+    void wrapAsyncListener_endsSpanOnSuccess() {
+        Key key = new Key("ns1", "set1", "k1");
+        Span span = AerospikeClientHelper.startSpan("GET", key);
+        assertThat(span).isNotNull();
+
+        SuccessCallback listener = () -> {};
+        Object wrapped = AerospikeClientHelper.wrapAsyncListener(listener, span);
+
+        assertThat(wrapped).isNotSameAs(listener);
+        ((SuccessCallback) wrapped).onSuccess();
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+        assertThat(spans.get(0).getName()).contains("aerospike GET");
+    }
+
+    @Test
+    void wrapAsyncListener_endsSpanOnFailure() {
+        Key key = new Key("ns1", "set1", "k1");
+        Span span = AerospikeClientHelper.startSpan("PUT", key);
+        assertThat(span).isNotNull();
+
+        FailureCallback listener = t -> {};
+        Object wrapped = AerospikeClientHelper.wrapAsyncListener(listener, span);
+
+        ((FailureCallback) wrapped).onFailure(new RuntimeException("timeout"));
+
+        List<SpanData> spans = spanExporter.getFinishedSpanItems();
+        assertThat(spans).hasSize(1);
+        assertThat(spans.get(0).getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+    }
+
+    @Test
+    void wrapAsyncListener_returnsNullForNull() {
+        assertThat(AerospikeClientHelper.wrapAsyncListener(null, null)).isNull();
+    }
+
+    // Test interfaces for proxy verification
+    interface SuccessCallback { void onSuccess(); }
+    interface FailureCallback { void onFailure(Throwable t); }
 }

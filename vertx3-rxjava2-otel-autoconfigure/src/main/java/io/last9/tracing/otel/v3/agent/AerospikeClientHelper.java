@@ -102,6 +102,118 @@ public final class AerospikeClientHelper {
     }
 
     /**
+     * Starts a span by scanning method arguments for Key or Key[].
+     * Used by the pattern-based sync advice that matches all public methods
+     * with a Policy-subclass first argument.
+     */
+    public static Span startSpanFromArgs(String operation, Object[] args) {
+        if (args == null) return startSpan(operation, null);
+        for (Object arg : args) {
+            if (arg instanceof Key) {
+                return startSpan(operation, (Key) arg);
+            }
+            if (arg instanceof Key[]) {
+                return startBatchSpan(operation, (Key[]) arg);
+            }
+        }
+        return startSpan(operation, null);
+    }
+
+    /**
+     * Enriches the current span with Aerospike connection metadata.
+     * Called from AerospikeCommandNodeAdvice after Command.getNode() returns.
+     */
+    public static void enrichWithConnectionMetadata(Object nodeObj, Object partitionObj) {
+        Span span = Span.current();
+        if (!span.getSpanContext().isValid()) return;
+
+        try {
+            // Node.getHost() → Host.name, Host.port
+            java.lang.reflect.Method getHost = nodeObj.getClass().getMethod("getHost");
+            Object host = getHost.invoke(nodeObj);
+            if (host != null) {
+                java.lang.reflect.Field nameField = host.getClass().getField("name");
+                java.lang.reflect.Field portField = host.getClass().getField("port");
+                String hostname = (String) nameField.get(host);
+                int port = portField.getInt(host);
+                span.setAttribute("net.peer.name", hostname);
+                span.setAttribute(AttributeKey.longKey("net.peer.port"), (long) port);
+            }
+        } catch (Exception ignored) {}
+
+        // Extract namespace from Partition
+        try {
+            java.lang.reflect.Field nsField = findField(partitionObj.getClass(), "namespace");
+            if (nsField != null) {
+                nsField.setAccessible(true);
+                Object ns = nsField.get(partitionObj);
+                if (ns instanceof String) {
+                    span.setAttribute("db.name", (String) ns);
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private static java.lang.reflect.Field findField(Class<?> clazz, String name) {
+        while (clazz != null && clazz != Object.class) {
+            try {
+                return clazz.getDeclaredField(name);
+            } catch (NoSuchFieldException e) {
+                clazz = clazz.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Wraps an async Aerospike listener with span lifecycle management.
+     * Uses dynamic proxy to support all listener interfaces.
+     *
+     * @param listener the original listener (RecordListener, WriteListener, etc.)
+     * @param span     the CLIENT span to end on callback
+     * @return a proxy that delegates to the original listener and ends the span
+     */
+    public static Object wrapAsyncListener(Object listener, Span span) {
+        if (listener == null) return null;
+        Class<?>[] interfaces = listener.getClass().getInterfaces();
+        if (interfaces.length == 0) {
+            // Might be a lambda or anonymous class — get interfaces from superclass
+            interfaces = listener.getClass().getSuperclass() != null
+                    ? listener.getClass().getSuperclass().getInterfaces()
+                    : new Class<?>[0];
+        }
+        if (interfaces.length == 0) return listener;
+
+        final Span capturedSpan = span;
+        return java.lang.reflect.Proxy.newProxyInstance(
+                listener.getClass().getClassLoader(),
+                interfaces,
+                (proxy, method, args) -> {
+                    try {
+                        Object result = method.invoke(listener, args);
+                        return result;
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    } finally {
+                        String methodName = method.getName();
+                        if ("onSuccess".equals(methodName)) {
+                            capturedSpan.end();
+                            IN_AEROSPIKE_CALL.set(false);
+                        } else if ("onFailure".equals(methodName)) {
+                            if (args != null && args.length > 0 && args[0] instanceof Throwable) {
+                                Throwable t = (Throwable) args[0];
+                                capturedSpan.recordException(t,
+                                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
+                                capturedSpan.setStatus(StatusCode.ERROR, t.getMessage());
+                            }
+                            capturedSpan.end();
+                            IN_AEROSPIKE_CALL.set(false);
+                        }
+                    }
+                });
+    }
+
+    /**
      * Ends the span (success or error). Closes the scope if provided.
      */
     public static void endSpan(Span span, Scope scope, Throwable thrown) {

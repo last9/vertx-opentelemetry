@@ -157,6 +157,7 @@ public final class Vertx4Instrumenter {
 
     private static void installAerospikeInstrumentation(Instrumentation inst,
                                                          AgentBuilder.Listener listener) {
+        // Sync: pattern-based matching on Policy arg0
         try {
             new AgentBuilder.Default()
                     .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -164,32 +165,38 @@ public final class Vertx4Instrumenter {
                     .disableClassFormatChanges()
                     .type(named("com.aerospike.client.AerospikeClient"))
                     .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                            builder.visit(Advice.to(AerospikeClientAdvice.class)
-                                    .on(namedOneOf("get", "put", "delete", "exists",
-                                            "operate", "touch", "append", "prepend",
-                                            "add", "getHeader", "execute")
+                            builder.visit(Advice.to(AerospikeSyncAdvice.class)
+                                    .on(isPublic()
+                                            .and(isMethod())
                                             .and(not(takesArguments(0)))
-                                            .and(takesArgument(1, named(
-                                                    "com.aerospike.client.Key"))))))
+                                            .and(takesArgument(0, nameStartsWith(
+                                                    "com.aerospike.client.policy"))))))
                     .installOn(inst);
+            log.info("Vertx4Instrumenter: Aerospike sync instrumentation installed (pattern-based)");
+        } catch (Throwable t) {
+            log.warn("Vertx4Instrumenter: Aerospike sync instrumentation skipped: {}", t.getMessage());
+        }
 
+        // Async: listener wrapping on arg1
+        try {
             new AgentBuilder.Default()
                     .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
                     .with(listener)
                     .disableClassFormatChanges()
                     .type(named("com.aerospike.client.AerospikeClient"))
                     .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                            builder.visit(Advice.to(AerospikeBatchAdvice.class)
-                                    .on(namedOneOf("get", "exists", "getHeader")
-                                            .and(not(takesArguments(0)))
-                                            .and(takesArgument(1, isArray())))))
+                            builder.visit(Advice.to(AerospikeAsyncAdvice.class)
+                                    .on(isPublic()
+                                            .and(isMethod())
+                                            .and(takesArgument(1, nameStartsWith(
+                                                    "com.aerospike.client.listener"))))))
                     .installOn(inst);
-
-            log.info("Vertx4Instrumenter: Aerospike instrumentation installed (single-key + batch)");
+            log.info("Vertx4Instrumenter: Aerospike async instrumentation installed");
         } catch (Throwable t) {
-            log.warn("Vertx4Instrumenter: Aerospike instrumentation skipped: {}", t.getMessage());
+            log.warn("Vertx4Instrumenter: Aerospike async instrumentation skipped: {}", t.getMessage());
         }
 
+        // SyncCommand.execute()
         try {
             new AgentBuilder.Default()
                     .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -203,6 +210,25 @@ public final class Vertx4Instrumenter {
             log.info("Vertx4Instrumenter: Aerospike SyncCommand instrumentation installed");
         } catch (Throwable t) {
             log.warn("Vertx4Instrumenter: Aerospike SyncCommand skipped: {}", t.getMessage());
+        }
+
+        // Command.getNode() — connection metadata enrichment
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("com.aerospike.client.command.Command"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(AerospikeCommandNodeAdvice.class)
+                                    .on(named("getNode")
+                                            .and(takesArguments(2))
+                                            .and(returns(named(
+                                                    "com.aerospike.client.cluster.Node"))))))
+                    .installOn(inst);
+            log.info("Vertx4Instrumenter: Aerospike connection metadata instrumentation installed");
+        } catch (Throwable t) {
+            log.warn("Vertx4Instrumenter: Aerospike connection metadata skipped: {}", t.getMessage());
         }
     }
 
