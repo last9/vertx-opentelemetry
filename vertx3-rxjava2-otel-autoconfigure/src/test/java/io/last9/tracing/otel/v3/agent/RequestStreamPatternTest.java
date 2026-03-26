@@ -201,6 +201,131 @@ class RequestStreamPatternTest {
         assertThat(testContext.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
     }
 
+    /**
+     * Simulates the HttpStreamHandler.handler() advice path — wraps the handler
+     * set by requestStream().toFlowable() via HttpServerAdviceHelper.wrapHandler().
+     *
+     * <p>This is what happens in production when the ByteBuddy agent intercepts
+     * HttpStreamHandler.handler(Handler): it calls wrapHandler() on the handler
+     * being set. Without TracedRouter or any Router instrumentation, the wrapped
+     * handler alone should produce SERVER spans.
+     *
+     * <p>Uses a plain custom handler (no Router) to prove the HttpStreamHandler
+     * intercept works independently.
+     */
+    @Test
+    void requestStreamPattern_withWrappedHandler_producesServerSpans(VertxTestContext testContext) throws Exception {
+        // Plain handler — no Router, no TracedRouter
+        io.vertx.core.Handler<io.vertx.core.http.HttpServerRequest> plainHandler = request ->
+                request.response().putHeader("content-type", "text/plain").end("wrapped-ok");
+
+        // Simulate what the ByteBuddy advice does: wrap the handler
+        @SuppressWarnings("unchecked")
+        io.vertx.core.Handler<io.vertx.core.http.HttpServerRequest> wrappedHandler =
+                (io.vertx.core.Handler<io.vertx.core.http.HttpServerRequest>)
+                        HttpServerAdviceHelper.wrapHandler(plainHandler);
+
+        // Use requestStream pattern with the wrapped handler (no Router)
+        var server = vertx.getDelegate().createHttpServer(
+                new io.vertx.core.http.HttpServerOptions().setPort(0));
+
+        // Manually set the wrapped handler via requestHandler (simulating what
+        // happens after HttpStreamHandler.handler() advice wraps the handler)
+        server.requestHandler(wrappedHandler);
+
+        VertxTestContext startCtx = new VertxTestContext();
+        server.listen(0, ar -> {
+            if (ar.succeeded()) {
+                int wrappedPort = ar.result().actualPort();
+                webClient.get(wrappedPort, "localhost", "/api/wrapped-test")
+                        .rxSend()
+                        .subscribe(
+                                resp -> testContext.verify(() -> {
+                                    assertThat(resp.bodyAsString()).isEqualTo("wrapped-ok");
+                                    waitForSpans(1);
+
+                                    List<SpanData> serverSpans = spanExporter.getFinishedSpanItems().stream()
+                                            .filter(s -> s.getKind() == SpanKind.SERVER)
+                                            .collect(Collectors.toList());
+
+                                    assertThat(serverSpans)
+                                            .as("wrapHandler() on requestStream handler should produce SERVER spans")
+                                            .hasSize(1);
+
+                                    SpanData span = serverSpans.get(0);
+                                    assertThat(span.getName()).isEqualTo("GET /api/wrapped-test");
+                                    assertThat(span.getAttributes().get(
+                                            io.opentelemetry.api.common.AttributeKey.stringKey("http.request.method")))
+                                            .isEqualTo("GET");
+                                    assertThat(span.getAttributes().get(
+                                            io.opentelemetry.api.common.AttributeKey.longKey("http.response.status_code")))
+                                            .isEqualTo(200L);
+                                    testContext.completeNow();
+                                }),
+                                testContext::failNow
+                        );
+            } else {
+                testContext.failNow(ar.cause());
+            }
+        });
+
+        assertThat(testContext.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
+    /**
+     * Verifies that requestStream().toFlowable() does NOT call requestHandler()
+     * on HttpServerImpl — proving the need for the HttpStreamHandler intercept.
+     *
+     * <p>This test uses a plain Router (no TracedRouter, no wrapHandler) with the
+     * requestStream pattern. Without the HttpStreamHandler advice, no SERVER spans
+     * should be produced — only the Router's own handling runs.
+     */
+    @Test
+    void requestStreamPattern_withoutInstrumentation_producesNoServerSpans(VertxTestContext testContext) throws Exception {
+        // Plain Router — no TracedRouter, no agent instrumentation
+        Router uninstrumentedRouter = Router.router(vertx);
+        uninstrumentedRouter.get("/api/plain").handler(ctx ->
+                ctx.response().end("plain-ok"));
+
+        var server = vertx.createHttpServer(new HttpServerOptions().setPort(0));
+        var handleRequests = server.requestStream()
+                .toFlowable()
+                .map(HttpServerRequest::pause)
+                .onBackpressureDrop(req -> req.response().setStatusCode(503).end())
+                .observeOn(RxHelper.scheduler(vertx))
+                .doOnNext(uninstrumentedRouter::handle)
+                .map(HttpServerRequest::resume)
+                .ignoreElements();
+
+        VertxTestContext startCtx = new VertxTestContext();
+        server.rxListen()
+                .doOnSubscribe(d -> handleRequests.subscribe())
+                .subscribe(s -> {
+                    int plainPort = s.actualPort();
+                    webClient.get(plainPort, "localhost", "/api/plain")
+                            .rxSend()
+                            .subscribe(
+                                    resp -> testContext.verify(() -> {
+                                        assertThat(resp.bodyAsString()).isEqualTo("plain-ok");
+                                        // Wait a bit to be sure no spans arrive
+                                        Thread.sleep(500);
+
+                                        List<SpanData> serverSpans = spanExporter.getFinishedSpanItems().stream()
+                                                .filter(ss -> ss.getKind() == SpanKind.SERVER)
+                                                .collect(Collectors.toList());
+
+                                        assertThat(serverSpans)
+                                                .as("Without instrumentation, requestStream pattern should produce ZERO server spans")
+                                                .isEmpty();
+                                        testContext.completeNow();
+                                    }),
+                                    testContext::failNow
+                            );
+                }, testContext::failNow);
+
+        assertThat(testContext.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
     private void waitForSpans(int minCount) throws InterruptedException {
         for (int i = 0; i < 50; i++) {
             if (spanExporter.getFinishedSpanItems().size() >= minCount) {
