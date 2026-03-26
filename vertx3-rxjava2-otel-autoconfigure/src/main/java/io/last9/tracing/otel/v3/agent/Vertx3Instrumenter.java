@@ -708,5 +708,24 @@ public final class Vertx3Instrumenter {
         } catch (Throwable t) {
             log.warn("Vertx3Instrumenter: Netty pipeline instrumentation skipped: {}", t.getMessage());
         }
+
+        // addBefore — Vert.x uses addBefore("handler", "codec", new HttpServerCodec(...))
+        // to set up the HTTP pipeline, not addLast.
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.netty.channel.DefaultChannelPipeline"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(NettyServerPipelineBeforeAdvice.class)
+                                    .on(named("addBefore")
+                                            .and(takesArguments(3))
+                                            .and(takesArgument(2, named("io.netty.channel.ChannelHandler"))))))
+                    .installOn(inst);
+            log.info("Vertx3Instrumenter: Netty pipeline addBefore instrumentation installed");
+        } catch (Throwable t) {
+            log.warn("Vertx3Instrumenter: Netty pipeline addBefore skipped: {}", t.getMessage());
+        }
     }
 }
