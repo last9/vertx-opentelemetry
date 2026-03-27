@@ -143,4 +143,69 @@ public class SpanNameUpdater {
 
         return ctx.request().path();
     }
+
+    /**
+     * Variant of {@link #addToAllRoutes(Router)} for the core (non-RxJava) Vert.x router
+     * ({@code io.vertx.ext.web.Router}). Used by the agent when the app uses the RxJava 2
+     * bindings ({@code io.vertx.reactivex.ext.web.Router}) which delegate internally to the
+     * core router.
+     *
+     * @param router the core {@code io.vertx.ext.web.Router}
+     */
+    public static void addToAllRoutesCoreRouter(io.vertx.ext.web.Router router) {
+        router.route().order(-1000).handler(ctx -> {
+            Span span = Span.current();
+            if (span != null && span.isRecording()) {
+                ctx.put(SPAN_KEY, span);
+            }
+
+            ctx.response().headersEndHandler(v -> {
+                Span captured = ctx.get(SPAN_KEY);
+                if (captured != null && captured.isRecording()) {
+                    String method = ctx.request().method().name();
+
+                    String route = ctx.get(ROUTE_KEY);
+                    if (route == null) {
+                        io.vertx.ext.web.Route currentRoute = ctx.currentRoute();
+                        if (currentRoute != null) {
+                            route = currentRoute.getPath();
+                        }
+                        if (route == null || route.isEmpty()) {
+                            route = ctx.normalizedPath();
+                        }
+                        if (route == null || route.isEmpty()) {
+                            route = ctx.request().path();
+                        }
+                    }
+
+                    captured.updateName(method + " " + route);
+                    captured.setAttribute(SemanticAttributes.HTTP_ROUTE, route);
+
+                    int statusCode = ctx.response().getStatusCode();
+                    captured.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, statusCode);
+                    if (statusCode >= 500) {
+                        Throwable failure = ctx.failure();
+                        if (failure != null) {
+                            captured.recordException(failure,
+                                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        }
+                        captured.setStatus(StatusCode.ERROR);
+                    }
+                }
+            });
+
+            ctx.next();
+        });
+
+        router.route().order(Integer.MAX_VALUE - 1).handler(ctx -> {
+            io.vertx.ext.web.Route currentRoute = ctx.currentRoute();
+            if (currentRoute != null) {
+                String path = currentRoute.getPath();
+                if (path != null && !path.isEmpty()) {
+                    ctx.put(ROUTE_KEY, path);
+                }
+            }
+            ctx.next();
+        });
+    }
 }
