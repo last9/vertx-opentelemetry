@@ -35,8 +35,13 @@ public final class NettyHttpClientHelper {
 
     private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
 
-    /** Guard to prevent double-instrumentation with WebClient advice. */
-    static final ThreadLocal<Boolean> IN_HTTP_CLIENT_CALL =
+    /**
+     * Guard to prevent double CLIENT span when both {@link io.last9.tracing.otel.v3.TracedWebClient}
+     * and the Netty-level ByteBuddy advice are active for the same request.
+     * Set to {@code true} by {@link io.last9.tracing.otel.v3.TracedHttpRequest} before calling the
+     * delegate send, so the advice in {@link NettyHttpClientAdvice#onEnter} skips span creation.
+     */
+    public static final ThreadLocal<Boolean> IN_HTTP_CLIENT_CALL =
             ThreadLocal.withInitial(() -> false);
 
     /**
