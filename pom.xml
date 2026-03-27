@@ -6,7 +6,7 @@
 
     <groupId>io.last9</groupId>
     <artifactId>vertx-otel-autoconfigure</artifactId>
-    <version>2.3.4-beta.1</version>
+    <version>2.3.4-beta.2</version>
     <packaging>pom</packaging>
 
     <name>Vert.x OpenTelemetry Auto-Configure</name>
@@ -196,7 +196,8 @@
                          Credentials come from the Maven server 'central', which actions/setup-java
                          maps from MAVEN_USERNAME / MAVEN_PASSWORD environment variables.
                          autoPublish=true: skip the manual "Release" click in the UI.
-                         waitUntil=published: block the CI job until Central finishes validation. -->
+                         waitUntil=uploaded: exit once the bundle is uploaded; Central validates
+                         and publishes asynchronously (avoids 30-min CI timeout). -->
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
@@ -206,7 +207,7 @@
                             <publishingServerId>central</publishingServerId>
                             <tokenAuth>true</tokenAuth>
                             <autoPublish>true</autoPublish>
-                            <waitUntil>published</waitUntil>
+                            <waitUntil>uploaded</waitUntil>
                         </configuration>
                     </plugin>
                 </plugins>
