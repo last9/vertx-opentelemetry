@@ -42,7 +42,7 @@ public final class HttpServerAdviceHelper {
      * If the app bundles an older version of this class, the version won't match
      * the agent's expected version, revealing a classpath shadowing issue.
      */
-    public static final String HELPER_VERSION = "2.2.3";
+    public static final String HELPER_VERSION = "2.3.1-beta.5";
 
     /**
      * Track wrapped handlers to avoid double-wrapping when requestHandler()
@@ -165,19 +165,15 @@ public final class HttpServerAdviceHelper {
             @Override
             public void handle(HttpServerRequest request) {
 
-                // Check if Netty-level instrumentation already created a SERVER span.
-                // If so, adopt it (manage scope only) — don't create a duplicate.
-                Span nettySpan = NettyServerTracingHandler.NETTY_SERVER_SPAN.get();
-                if (nettySpan != null && nettySpan.getSpanContext().isValid()) {
-                    NettyServerTracingHandler.NETTY_SERVER_SPAN.remove();
-                    // Enrich the Netty span with Vert.x-level attributes
-                    nettySpan.setAttribute("url.scheme", request.isSSL() ? "https" : "http");
-                    // Make Netty span current within this handler scope, then delegate.
-                    // Netty handler manages span lifecycle (end on response write).
-                    Context otelContext = Context.root().with(nettySpan);
-                    try (Scope ignored = otelContext.makeCurrent()) {
-                        original.handle(request);
-                    }
+                // Deduplication: if a SERVER span already exists (from Netty pipeline
+                // handler or another interceptor), adopt it instead of creating a duplicate.
+                // The Netty RequestHandler makes the span current via scope during channelRead.
+                Span existingSpan = Span.current();
+                if (existingSpan.getSpanContext().isValid()) {
+                    // Enrich the existing span with Vert.x-level attributes
+                    existingSpan.setAttribute("url.scheme", request.isSSL() ? "https" : "http");
+                    // Span lifecycle is managed by whoever created it (Netty handler)
+                    original.handle(request);
                     return;
                 }
 
@@ -187,20 +183,6 @@ public final class HttpServerAdviceHelper {
 
                 Context parentContext = propagator.extract(Context.root(), request, HEADER_GETTER);
 
-                // Parse host header for server.address and server.port
-                String hostHeader = request.host();
-                String serverAddr = hostHeader;
-                long serverPort = -1;
-                if (hostHeader != null && hostHeader.contains(":")) {
-                    int idx = hostHeader.lastIndexOf(':');
-                    serverAddr = hostHeader.substring(0, idx);
-                    try {
-                        serverPort = Long.parseLong(hostHeader.substring(idx + 1));
-                    } catch (NumberFormatException ignored) {
-                        // keep -1
-                    }
-                }
-
                 Span span = tracer.spanBuilder(method + " " + path)
                         .setParent(parentContext)
                         .setSpanKind(SpanKind.SERVER)
@@ -208,18 +190,18 @@ public final class HttpServerAdviceHelper {
                         .setAttribute("url.path", path)
                         .setAttribute("url.scheme",
                                 request.isSSL() ? "https" : "http")
-                        .setAttribute("server.address", serverAddr)
                         .startSpan();
 
-                if (serverPort > 0) {
-                    span.setAttribute(AttributeKey.longKey("server.port"), serverPort);
-                }
+                NettyServerTracingHandler.applyHostHeader(span, request.host());
 
-                // Set response attributes and end span when body is fully sent.
-                // The span is NOT ended here — it's ended in bodyEndHandler after the
-                // response is fully sent. But the SCOPE must be closed immediately after
-                // the handler returns to avoid context leaks on the event loop thread.
+                // End span when response completes. Multiple fallback handlers ensure
+                // the span ends regardless of the HTTP server setup pattern:
+                // - bodyEndHandler: standard Vert.x callback after response body is written
+                // - endHandler: WriteStream end callback (fallback for requestStream patterns)
+                // - closeHandler: connection close (last resort)
+                // The span.isRecording() check ensures only the first handler ends the span.
                 HttpServerResponse response = request.response();
+
                 response.headersEndHandler(v -> {
                     int statusCode = response.getStatusCode();
                     span.setAttribute(AttributeKey.longKey("http.response.status_code"), (long) statusCode);
@@ -228,11 +210,20 @@ public final class HttpServerAdviceHelper {
                     }
                 });
 
-                response.bodyEndHandler(v -> span.end());
+                response.bodyEndHandler(v -> {
+                    if (span.isRecording()) {
+                        span.end();
+                    }
+                });
 
-                // Handle connection reset / close before response
+                response.endHandler(v -> {
+                    if (span.isRecording()) {
+                        span.end();
+                    }
+                });
+
                 response.closeHandler(v -> {
-                    if (!response.ended()) {
+                    if (span.isRecording()) {
                         span.setStatus(StatusCode.ERROR, "Connection closed before response completed");
                         span.end();
                     }

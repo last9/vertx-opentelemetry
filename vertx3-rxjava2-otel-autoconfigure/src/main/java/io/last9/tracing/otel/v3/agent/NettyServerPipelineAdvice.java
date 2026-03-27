@@ -15,8 +15,13 @@ import net.bytebuddy.asm.Advice;
  */
 public class NettyServerPipelineAdvice {
 
-    @Advice.OnMethodExit(suppress = Throwable.class)
+    @Advice.OnMethodExit
     static void onExit(@Advice.Argument(1) Object handler, @Advice.This Object pipeline) {
-        NettyServerTracingHandler.maybeInject(handler, pipeline);
+        try {
+            NettyServerTracingHandler.maybeInject(handler, pipeline);
+        } catch (Throwable t) {
+            System.err.println("[Last9 OTel Agent] NettyServerPipelineAdvice.onExit FAILED: "
+                    + t.getClass().getName() + ": " + t.getMessage());
+        }
     }
 }

@@ -14,9 +14,17 @@ import net.bytebuddy.implementation.bytecode.assign.Assigner;
  */
 public class HttpServerAdvice {
 
-    @Advice.OnMethodEnter(suppress = Throwable.class)
+    @Advice.OnMethodEnter
     static void onEnter(
             @Advice.Argument(value = 0, readOnly = false, typing = Assigner.Typing.DYNAMIC) Object handler) {
-        handler = HttpServerAdviceHelper.wrapHandler(handler);
+        try {
+            System.err.println("[Last9 OTel Agent] HttpServerAdvice.onEnter fired — handler: "
+                    + (handler != null ? handler.getClass().getName() : "null"));
+            handler = HttpServerAdviceHelper.wrapHandler(handler);
+        } catch (Throwable t) {
+            System.err.println("[Last9 OTel Agent] HttpServerAdvice.onEnter FAILED: "
+                    + t.getClass().getName() + ": " + t.getMessage());
+            t.printStackTrace(System.err);
+        }
     }
 }
