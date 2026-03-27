@@ -120,12 +120,15 @@ public final class Vertx3Instrumenter {
                                         .and(takesArgument(0,
                                                 named("io.vertx.core.Vertx"))))))
 
-                // WebClient.create(Vertx) / create(Vertx, WebClientOptions) → wrap result
+                // WebClient.create(Vertx), create(Vertx, WebClientOptions), wrap(WebClient)
+                // → wrap result with TracedWebClient for CLIENT spans.
+                // WebClient.wrap() is also a static factory method; intercepting it ensures
+                // apps that create clients via wrap() are instrumented without code changes.
                 .type(named("io.vertx.reactivex.ext.web.client.WebClient"))
                 .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
                         builder.visit(Advice.to(WebClientAdvice.class)
                                 .on(isStatic()
-                                        .and(named("create"))
+                                        .and(named("create").or(named("wrap")))
                                         .and(returns(named(
                                                 "io.vertx.reactivex.ext.web.client.WebClient"))))))
 
@@ -574,32 +577,43 @@ public final class Vertx3Instrumenter {
     }
 
     /**
-     * Netty HTTP Client: intercept outgoing HTTP requests through Vert.x's core
-     * HTTP client at the {@code HttpClientRequestImpl} level.
+     * Vert.x HTTP Client: intercepts outgoing HTTP requests following the same
+     * approach used by the OTel Java agent and Datadog.
      *
-     * <p>Three intercept points for full round-trip visibility:
-     * <ol>
-     *   <li>{@code HttpClientRequestImpl.end()} — span creation + traceparent injection</li>
-     *   <li>{@code HttpClientRequestBase.handleResponse()} — response status code + span end</li>
-     *   <li>{@code HttpClientRequestBase.handleException()} — error recording + span end</li>
-     * </ol>
+     * <p>Intercept strategy (mirrors OTel Java agent):
+     * <ul>
+     *   <li>Type matcher: {@code implementsInterface(HttpClientRequest)} — catches
+     *       {@code HttpClientRequestImpl} and any other implementation without
+     *       depending on the concrete class name.</li>
+     *   <li>Send methods: all {@code end*} overloads + {@code sendHead} — in Vert.x 3,
+     *       {@code end(Buffer)}, {@code end(String)}, etc. do NOT delegate to the
+     *       no-arg {@code end()}, so all overloads must be intercepted independently
+     *       to cover GET (no body) and POST/PUT (with body).</li>
+     *   <li>Response/exception: {@code handleResponse} + {@code handleException} on
+     *       {@code HttpClientRequestBase} to complete the span.</li>
+     * </ul>
      *
-     * <p>The WebClient advice already covers WebClient.create() wrapping, so the
-     * helper uses a ThreadLocal guard to prevent double-instrumentation.
+     * <p>The {@code IN_HTTP_CLIENT_CALL} ThreadLocal guard (set by
+     * {@link NettyHttpClientHelper#startSpan}) prevents duplicate CLIENT spans when
+     * {@link io.last9.tracing.otel.v3.TracedWebClient} is also active.
      */
     private static void installNettyHttpClientInstrumentation(Instrumentation inst,
                                                                 AgentBuilder.Listener listener) {
         try {
-            // 1. Intercept end() on HttpClientRequestImpl — creates span + injects traceparent
+            // 1. Intercept all end() overloads + sendHead() on anything implementing
+            //    HttpClientRequest (same approach as OTel Java agent's HttpRequestInstrumentation).
+            //    named("end") matches all methods named exactly "end" — without also
+            //    matching endHandler(). Adding sendHead() covers HTTP/1.1 streaming
+            //    where headers are sent before the body.
             new AgentBuilder.Default()
                     .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
                     .with(listener)
                     .disableClassFormatChanges()
-                    .type(named("io.vertx.core.http.impl.HttpClientRequestImpl"))
+                    .type(hasSuperType(named("io.vertx.core.http.HttpClientRequest"))
+                            .and(not(isInterface())))
                     .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
                             builder.visit(Advice.to(NettyHttpClientAdvice.class)
-                                    .on(named("end")
-                                            .and(takesArguments(0)))))
+                                    .on(named("end").or(named("sendHead")))))
                     .installOn(inst);
 
             // 2. Intercept handleResponse() on HttpClientRequestBase — sets status code, ends span
@@ -626,9 +640,10 @@ public final class Vertx3Instrumenter {
                                             .and(takesArguments(1)))))
                     .installOn(inst);
 
-            log.info("Vertx3Instrumenter: Netty HTTP client instrumentation installed");
+            log.info("Vertx3Instrumenter: HTTP client instrumentation installed " +
+                    "(implementsInterface(HttpClientRequest), all end() + sendHead)");
         } catch (Throwable t) {
-            log.warn("Vertx3Instrumenter: Netty HTTP client instrumentation skipped: {}",
+            log.warn("Vertx3Instrumenter: HTTP client instrumentation skipped: {}",
                     t.getMessage());
         }
     }

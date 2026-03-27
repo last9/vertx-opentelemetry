@@ -5,16 +5,22 @@ import io.opentelemetry.context.Scope;
 import net.bytebuddy.asm.Advice;
 
 /**
- * ByteBuddy advice for Netty-based HTTP client requests at the Vert.x level.
+ * ByteBuddy advice for Vert.x HTTP client requests — applied to all implementations
+ * of {@code io.vertx.core.http.HttpClientRequest} (same approach as OTel Java agent).
  *
- * <p>Intercepts {@code io.vertx.core.http.impl.HttpClientRequestImpl.end()}
- * (no-arg variant) which is called when the HTTP request is written to the
- * network. Creates a CLIENT span, injects the {@code traceparent} header for
- * distributed tracing, and stores the span for later completion by
- * {@link NettyHttpResponseAdvice} or {@link NettyHttpExceptionAdvice}.
+ * <p>Applied to all {@code end*()} overloads and {@code sendHead()} because in Vert.x 3
+ * each overload is an independent code path: {@code end(Buffer chunk)} does NOT call
+ * the no-arg {@code end()}, so every variant must be intercepted to cover GET (no body)
+ * and POST/PUT (with body) requests.
  *
- * <p>The span is NOT ended here — it is ended when the response arrives or
- * an exception occurs, so the span duration covers the full round-trip time.
+ * <p>Creates a CLIENT span, injects the {@code traceparent} header for distributed
+ * tracing, and stores the span for later completion by {@link NettyHttpResponseAdvice}
+ * or {@link NettyHttpExceptionAdvice}. The span is NOT ended here — it is ended when
+ * the response arrives or an exception occurs, covering the full round-trip time.
+ *
+ * <p>The {@code IN_HTTP_CLIENT_CALL} ThreadLocal guard in {@link NettyHttpClientHelper}
+ * prevents duplicate CLIENT spans when {@link io.last9.tracing.otel.v3.TracedWebClient}
+ * is also active for the same request.
  */
 public class NettyHttpClientAdvice {
 
