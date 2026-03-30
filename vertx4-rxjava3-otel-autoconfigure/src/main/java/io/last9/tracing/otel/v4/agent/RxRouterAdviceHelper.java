@@ -11,7 +11,16 @@ import java.util.Set;
 
 /**
  * Helper for {@link RxRouterAdvice}. Calls {@link SpanNameUpdater#addToAllRoutes(Router)}
- * on the newly created Router, with deduplication to avoid double-instrumentation.
+ * (or the core-router variant) on the newly created Router, with deduplication to avoid
+ * double-instrumentation.
+ *
+ * <p>Handles three Router variants:
+ * <ol>
+ *   <li>{@code io.vertx.rxjava3.ext.web.Router} — RxJava 3 (primary v4 target)</li>
+ *   <li>{@code io.vertx.ext.web.Router} — core Router, also used when the app uses the
+ *       RxJava 2 bindings ({@code io.vertx.reactivex.ext.web.Router}) which delegate
+ *       internally to the core router</li>
+ * </ol>
  */
 public final class RxRouterAdviceHelper {
 
@@ -22,21 +31,25 @@ public final class RxRouterAdviceHelper {
     private RxRouterAdviceHelper() {}
 
     public static void instrumentIfNeeded(Object routerObj) {
-        if (!(routerObj instanceof Router)) {
-            return;
-        }
-        Router router = (Router) routerObj;
-
         // Deduplicate by object identity — each Router instance is instrumented at most once
-        if (!INSTRUMENTED.add(router)) {
+        if (!INSTRUMENTED.add(routerObj)) {
             return;
         }
 
-        try {
-            SpanNameUpdater.addToAllRoutes(router);
-            log.info("Vertx4Agent: SpanNameUpdater installed on RxJava3 Router");
-        } catch (Throwable t) {
-            log.warn("Vertx4Agent: Failed to install SpanNameUpdater on Router: {}", t.getMessage());
+        if (routerObj instanceof Router) {
+            try {
+                SpanNameUpdater.addToAllRoutes((Router) routerObj);
+                log.info("Vertx4Agent: SpanNameUpdater installed on RxJava3 Router");
+            } catch (Throwable t) {
+                log.warn("Vertx4Agent: Failed to install SpanNameUpdater on RxJava3 Router: {}", t.getMessage());
+            }
+        } else if (routerObj instanceof io.vertx.ext.web.Router) {
+            try {
+                SpanNameUpdater.addToAllRoutesCoreRouter((io.vertx.ext.web.Router) routerObj);
+                log.info("Vertx4Agent: SpanNameUpdater installed on core Router (RxJava2/plain)");
+            } catch (Throwable t) {
+                log.warn("Vertx4Agent: Failed to install SpanNameUpdater on core Router: {}", t.getMessage());
+            }
         }
     }
 }

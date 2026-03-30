@@ -79,6 +79,7 @@ public final class Vertx4Instrumenter {
         // --- Library-agnostic interceptors (same as v3 agent) ---
         // These cover third-party libraries NOT handled by the VertxTracer SPI.
 
+        installHttpClientTracerInstrumentation(inst, listener);
         installAerospikeInstrumentation(inst, listener);
         installRawJdbcInstrumentation(inst, listener);
         installJedisInstrumentation(inst, listener);
@@ -152,6 +153,50 @@ public final class Vertx4Instrumenter {
             log.info("Vertx4Instrumenter: Core Router instrumentation installed (route-pattern span naming)");
         } catch (Throwable t) {
             log.warn("Vertx4Instrumenter: Core Router instrumentation skipped: {}", t.getMessage());
+        }
+    }
+
+    /**
+     * Intercepts {@code OpenTelemetryTracer.sendRequest()} and {@code receiveResponse()} to
+     * enrich CLIENT HTTP spans with path-based names and response status codes.
+     *
+     * <p>The {@code vertx-opentelemetry} SPI creates CLIENT spans named only with the HTTP
+     * method (e.g., {@code "GET"}) and never sets {@code http.status_code} or error status.
+     * These advices mutate the SPI-created span directly (via reflection) rather than creating
+     * a second span.
+     */
+    private static void installHttpClientTracerInstrumentation(Instrumentation inst,
+                                                                AgentBuilder.Listener listener) {
+        // sendRequest() — update span name with path on exit (span just created)
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.vertx.tracing.opentelemetry.OpenTelemetryTracer"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(HttpClientSendAdvice.class)
+                                    .on(named("sendRequest").and(takesArguments(7)))))
+                    .installOn(inst);
+            log.info("Vertx4Instrumenter: HTTP CLIENT send instrumentation installed (span name enrichment)");
+        } catch (Throwable t) {
+            log.warn("Vertx4Instrumenter: HTTP CLIENT send instrumentation skipped: {}", t.getMessage());
+        }
+
+        // receiveResponse() — add status code + error status on enter (before SPI ends span)
+        try {
+            new AgentBuilder.Default()
+                    .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                    .with(listener)
+                    .disableClassFormatChanges()
+                    .type(named("io.vertx.tracing.opentelemetry.OpenTelemetryTracer"))
+                    .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
+                            builder.visit(Advice.to(HttpClientReceiveAdvice.class)
+                                    .on(named("receiveResponse").and(takesArguments(5)))))
+                    .installOn(inst);
+            log.info("Vertx4Instrumenter: HTTP CLIENT receive instrumentation installed (status code + error)");
+        } catch (Throwable t) {
+            log.warn("Vertx4Instrumenter: HTTP CLIENT receive instrumentation skipped: {}", t.getMessage());
         }
     }
 
