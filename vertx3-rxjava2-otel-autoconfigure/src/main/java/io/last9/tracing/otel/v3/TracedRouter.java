@@ -33,26 +33,36 @@ import java.util.WeakHashMap;
  *   <li>Extracts W3C {@code traceparent} headers for distributed tracing</li>
  *   <li>Sets HTTP semantic convention attributes on spans</li>
  *   <li>Updates span names with matched route patterns (e.g., {@code GET /v1/users/:id})</li>
- *   <li>Buffers the request body so {@link RoutingContext#getBodyAsJson()} and
- *       {@link RoutingContext#getBody()} work in handlers without a separate
- *       {@code BodyHandler}</li>
  * </ul>
  *
- * <p><strong>Do not add {@code BodyHandler.create()} to the router.</strong>
- * {@code TracedRouter} buffers the request body itself and calls {@code ctx.next()} only
- * after the body has arrived. Adding a separate {@code BodyHandler} will conflict with
- * this mechanism.
+ * <h2>Request body (POST/PUT routes)</h2>
+ * <p>{@code TracedRouter} does <strong>not</strong> buffer the request body. Add
+ * {@code BodyHandler} to individual routes that need it:
+ * <pre>{@code
+ * router.post("/v1/items")
+ *     .handler(BodyHandler.create())   // buffers the body
+ *     .handler(ctx -> {
+ *         JsonObject body = ctx.getBodyAsJson();
+ *         Span span = ctx.get("otel.span");  // use ctx, not Span.current()
+ *         ...
+ *     });
+ * }</pre>
+ *
+ * <p>{@code BodyHandler} calls {@code ctx.next()} asynchronously (after the body arrives),
+ * so the OTel thread-local scope is no longer active in the route handler. Retrieve the
+ * span via {@code ctx.get("otel.span")} instead of {@code Span.current()}. To re-activate
+ * the span for outgoing calls or RxJava context propagation:
+ * <pre>{@code
+ * Span span = ctx.get("otel.span");
+ * try (Scope scope = span.makeCurrent()) {
+ *     ClientTracing.inject(webClient.get(url)).rxSend().subscribe(...);
+ * }
+ * }</pre>
  *
  * <h2>Usage</h2>
  * <pre>{@code
  * // Instead of: Router router = Router.router(vertx);
  * Router router = TracedRouter.create(vertx);
- *
- * // No BodyHandler needed — body is already available:
- * router.post("/v1/items").handler(ctx -> {
- *     JsonObject body = ctx.getBodyAsJson();
- *     ...
- * });
  * }</pre>
  *
  * @see OtelLauncher
