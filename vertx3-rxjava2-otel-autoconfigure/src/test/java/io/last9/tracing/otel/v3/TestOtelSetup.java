@@ -11,7 +11,6 @@ import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -57,11 +56,14 @@ public class TestOtelSetup {
 
     public SpanData waitForServerSpan() {
         for (int i = 0; i < 50; i++) {
-            List<SpanData> spans = spanExporter.getFinishedSpanItems().stream()
+            java.util.Optional<SpanData> span = spanExporter.getFinishedSpanItems().stream()
                     .filter(s -> s.getKind() == SpanKind.SERVER)
-                    .toList();
-            if (!spans.isEmpty()) return spans.get(0);
-            try { Thread.sleep(100); } catch (InterruptedException e) { break; }
+                    .findFirst();
+            if (span.isPresent()) return span.get();
+            try { Thread.sleep(100); } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
         throw new AssertionError("No SERVER span found after 5 seconds");
     }

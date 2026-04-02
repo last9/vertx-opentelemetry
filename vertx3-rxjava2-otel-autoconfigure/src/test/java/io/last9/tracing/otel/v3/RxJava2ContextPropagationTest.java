@@ -25,7 +25,7 @@ class RxJava2ContextPropagationTest {
         RxJavaPlugins.reset();
         otel = new TestOtelSetup();
         tracer = otel.getTracer();
-        resetInstalledFlag();
+        TestOtelSetup.resetRxJava2InstalledFlag();
         RxJava2ContextPropagation.install();
     }
 
@@ -286,13 +286,4 @@ class RxJava2ContextPropagationTest {
         assertThat(single.blockingGet()).isEqualTo("value");
     }
 
-    private void resetInstalledFlag() {
-        try {
-            var field = RxJava2ContextPropagation.class.getDeclaredField("installed");
-            field.setAccessible(true);
-            ((java.util.concurrent.atomic.AtomicBoolean) field.get(null)).set(false);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to reset installed flag", e);
-        }
-    }
 }

@@ -62,8 +62,6 @@ class TracedRouterBodyBufferingTest {
 
         Router router = TracedRouter.create(vertx, otel.getOpenTelemetry());
 
-        // Correct pattern: route-level BodyHandler + ctx.get("otel.span").
-        // This is how AbstractReqResRoute-style routes should be set up.
         router.post("/api/data")
                 .handler(BodyHandler.create())
                 .handler(ctx -> {
@@ -79,17 +77,14 @@ class TracedRouterBodyBufferingTest {
         router.get("/api/query").handler(ctx ->
                 ctx.response().end(ctx.queryParam("q").stream().findFirst().orElse("empty")));
 
-        // POST route that also verifies span is accessible and trace context is propagatable.
         router.post("/api/span-check")
                 .handler(BodyHandler.create())
                 .handler(ctx -> {
-                    // Span is stored in RoutingContext — retrieve it directly.
-                    Span span = ctx.get("otel.span");
+                    Span span = ctx.get(TracedRouter.SPAN_KEY);
                     String traceId = (span != null)
                             ? span.getSpanContext().getTraceId()
                             : "no-span";
 
-                    // Re-activate span to prove it can be used for outgoing calls.
                     String activatedTraceId = "not-activated";
                     if (span != null) {
                         try (Scope ignored = span.makeCurrent()) {
@@ -174,7 +169,7 @@ class TracedRouterBodyBufferingTest {
     }
 
     /**
-     * Span is accessible via ctx.get("otel.span") in a POST handler that uses BodyHandler,
+     * Span is accessible via ctx.get(TracedRouter.SPAN_KEY) in a POST handler that uses BodyHandler,
      * and can be re-activated with span.makeCurrent() for outgoing call propagation.
      */
     @Test

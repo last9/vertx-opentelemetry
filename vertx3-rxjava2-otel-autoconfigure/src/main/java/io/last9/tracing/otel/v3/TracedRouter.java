@@ -71,7 +71,7 @@ import java.util.WeakHashMap;
 public final class TracedRouter {
 
     private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
-    private static final String SPAN_KEY = "otel.span";
+    public static final String SPAN_KEY = "otel.span";
     private static final String ROUTE_KEY = "otel.route";
 
     /** Tracks which Router instances already have tracing handlers installed.
