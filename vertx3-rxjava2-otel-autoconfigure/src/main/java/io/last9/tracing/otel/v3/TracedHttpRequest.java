@@ -214,39 +214,37 @@ class TracedHttpRequest<T> extends HttpRequest<T> {
             }
 
             // 4. Execute the send and record response/error on the span.
-            //    Set IN_HTTP_CLIENT_CALL before invoking the delegate so the Netty-level
-            //    ByteBuddy advice on HttpClientRequest.end() skips creating a duplicate
-            //    CLIENT span. The advice resets the flag in its own finally block.
-            //    The try-finally here ensures the flag is reset even when the agent is
-            //    absent (library-only usage with no ByteBuddy advice active).
-            NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(true);
-            try {
-                return sendFn.get()
-                        .doOnSuccess(response -> {
-                            int statusCode = response.statusCode();
-                            span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE,
-                                    (long) statusCode);
-                            if (statusCode >= 400) {
-                                span.setStatus(StatusCode.ERROR);
-                            }
+            //    Set IN_HTTP_CLIENT_CALL via doOnSubscribe so the flag is true when
+            //    the Vert.x event loop actually calls HttpClientRequest.end() (which is
+            //    synchronous inside send()). Setting it before sendFn.get() did NOT
+            //    work because RxJava's defer subscribes to the returned Single AFTER
+            //    the try/finally resets the flag, so the Netty-level ByteBuddy advice
+            //    always saw the flag as false and created a duplicate CLIENT span.
+            return sendFn.get()
+                    .doOnSubscribe(ignored -> NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(true))
+                    .doOnSuccess(response -> {
+                        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
+                        int statusCode = response.statusCode();
+                        span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE,
+                                (long) statusCode);
+                        if (statusCode >= 400) {
+                            span.setStatus(StatusCode.ERROR);
+                        }
+                        span.end();
+                    })
+                    .doOnError(err -> {
+                        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
+                        span.recordException(err,
+                                Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        span.setStatus(StatusCode.ERROR, err.getMessage());
+                        span.end();
+                    })
+                    .doOnDispose(() -> {
+                        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
+                        if (span.isRecording()) {
                             span.end();
-                        })
-                        .doOnError(err -> {
-                            span.recordException(err,
-                                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
-                            span.setStatus(StatusCode.ERROR, err.getMessage());
-                            span.end();
-                        })
-                        .doOnDispose(() -> {
-                            if (span.isRecording()) {
-                                span.end();
-                            }
-                        });
-            } finally {
-                // Reset flag in case Netty ByteBuddy advice is not active
-                // (library-only usage without the agent jar).
-                NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
-            }
+                        }
+                    });
         });
     }
 

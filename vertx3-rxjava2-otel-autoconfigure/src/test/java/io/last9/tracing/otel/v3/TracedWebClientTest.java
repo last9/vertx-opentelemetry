@@ -569,22 +569,28 @@ class TracedWebClientTest {
     }
 
     /**
-     * Verifies that TracedHttpRequest sets IN_HTTP_CLIENT_CALL before calling the delegate
-     * and clears it after. This prevents the Netty-level ByteBuddy advice from creating a
-     * duplicate CLIENT span when both TracedWebClient and the advice are active.
+     * Regression test: IN_HTTP_CLIENT_CALL must be TRUE at the moment the inner delegate's
+     * rxSend() is executed (which is when Vert.x calls end() to dispatch the HTTP request).
+     * This is the precise moment NettyHttpClientAdvice.onEnter fires.
+     *
+     * Bug: the old code used try/finally around sendFn.get() to set/reset the flag. But
+     * Single.defer subscribes to the returned Single AFTER the finally block completes, so
+     * the flag was always false by the time end() fired — causing duplicate CLIENT spans.
+     *
+     * Fix: use doOnSubscribe to set the flag right before the source is subscribed to.
+     *
+     * Threading note: must subscribe from the Vert.x event loop (via runOnContext) so that
+     * doOnSubscribe (sets flag) and doOnSuccess (clears flag) run on the same thread as the
+     * actual HTTP send. IN_HTTP_CLIENT_CALL is a ThreadLocal — cross-thread use is undefined.
      */
     @Test
-    void inHttpClientCallGuardIsSetDuringDelegateSend(Vertx vertx, VertxTestContext testCtx)
+    void inHttpClientCallGuardIsTrueDuringDelegateSubscription(Vertx vertx, VertxTestContext testCtx)
             throws Exception {
-        AtomicBoolean guardWasSetDuringSend = new AtomicBoolean(false);
+        AtomicBoolean guardWasTrueAtSendTime = new AtomicBoolean(false);
 
         Router router = Router.router(vertx);
-        router.get("/api/guard-check").handler(ctx -> {
-            // Check flag state during request handling (guard should be false here —
-            // it's only true during the synchronous end() call on the event loop, not
-            // during server-side request processing)
-            ctx.response().setStatusCode(200).end("ok");
-        });
+        router.get("/api/guard-check").handler(ctx ->
+                ctx.response().setStatusCode(200).end("ok"));
 
         int port = vertx.createHttpServer()
                 .requestHandler(router)
@@ -592,27 +598,55 @@ class TracedWebClientTest {
                 .blockingGet()
                 .actualPort();
 
-        WebClient traced = TracedWebClient.wrap(WebClient.create(vertx), otel.getOpenTelemetry());
+        // A WebClient whose rxSend() wraps the real request in Single.create so the spy
+        // lambda runs AFTER onSubscribe propagation (i.e., after doOnSubscribe(set_flag_true)
+        // has fired) but BEFORE the actual HTTP send — exactly where NettyHttpClientAdvice fires.
+        WebClient spyClient = new WebClient(WebClient.create(vertx).getDelegate()) {
+            @Override
+            public HttpRequest<Buffer> getAbs(String absoluteURI) {
+                HttpRequest<Buffer> real = super.getAbs(absoluteURI);
+                return new HttpRequest<Buffer>(real.getDelegate()) {
+                    @Override
+                    @SuppressWarnings("unchecked")
+                    public io.reactivex.Single<io.vertx.reactivex.ext.web.client.HttpResponse<Buffer>> rxSend() {
+                        return io.reactivex.Single.create(emitter -> {
+                            // Single.create's lambda runs INSIDE subscribeActual, AFTER
+                            // onSubscribe has propagated outward (so doOnSubscribe(set_flag_true)
+                            // has already fired). This is equivalent to when end() would be called.
+                            guardWasTrueAtSendTime.set(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get());
+                            real.rxSend().subscribe(
+                                    resp -> emitter.onSuccess((io.vertx.reactivex.ext.web.client.HttpResponse<Buffer>) resp),
+                                    emitter::tryOnError
+                            );
+                        });
+                    }
+                };
+            }
+        };
 
-        // Before send, guard must be false
-        assertThat(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get()).isFalse();
+        WebClient traced = TracedWebClient.wrap(spyClient, otel.getOpenTelemetry());
 
-        traced.getAbs("http://localhost:" + port + "/api/guard-check")
-                .rxSend()
-                .subscribe(response -> {
-                    testCtx.verify(() -> {
-                        // After send completes, guard must be reset to false
-                        assertThat(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get()).isFalse();
+        // Run the subscribe from the Vert.x event loop so all ThreadLocal reads/writes
+        // (doOnSubscribe, the send, doOnSuccess) happen on the same thread.
+        vertx.runOnContext(ignored -> {
+            assertThat(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get()).isFalse();
 
-                        // CLIENT span created once (not doubled)
-                        waitForSpans(1);
-                        long clientSpanCount = spanExporter.getFinishedSpanItems().stream()
-                                .filter(s -> s.getKind() == SpanKind.CLIENT)
-                                .count();
-                        assertThat(clientSpanCount).isEqualTo(1);
-                    });
-                    testCtx.completeNow();
-                }, testCtx::failNow);
+            traced.getAbs("http://localhost:" + port + "/api/guard-check")
+                    .rxSend()
+                    .subscribe(response -> {
+                        testCtx.verify(() -> {
+                            // Guard must have been TRUE when the send lambda ran.
+                            // If false, NettyHttpClientAdvice would have created a duplicate span.
+                            assertThat(guardWasTrueAtSendTime.get())
+                                    .as("IN_HTTP_CLIENT_CALL must be true when send() is called")
+                                    .isTrue();
+
+                            // Guard must be reset to false after the request completes.
+                            assertThat(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get()).isFalse();
+                        });
+                        testCtx.completeNow();
+                    }, testCtx::failNow);
+        });
 
         assertThat(testCtx.awaitCompletion(5, TimeUnit.SECONDS)).isTrue();
     }
