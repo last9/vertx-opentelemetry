@@ -1,6 +1,5 @@
 package io.last9.tracing.otel.v3;
 
-import io.last9.tracing.otel.v3.agent.NettyHttpClientHelper;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
@@ -214,16 +213,10 @@ class TracedHttpRequest<T> extends HttpRequest<T> {
             }
 
             // 4. Execute the send and record response/error on the span.
-            //    Set IN_HTTP_CLIENT_CALL via doOnSubscribe so the flag is true when
-            //    the Vert.x event loop actually calls HttpClientRequest.end() (which is
-            //    synchronous inside send()). Setting it before sendFn.get() did NOT
-            //    work because RxJava's defer subscribes to the returned Single AFTER
-            //    the try/finally resets the flag, so the Netty-level ByteBuddy advice
-            //    always saw the flag as false and created a duplicate CLIENT span.
+            //    The Netty-level ByteBuddy advice detects the traceparent header we
+            //    injected in step 3 and skips duplicate CLIENT span creation.
             return sendFn.get()
-                    .doOnSubscribe(ignored -> NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(true))
                     .doOnSuccess(response -> {
-                        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
                         int statusCode = response.statusCode();
                         span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE,
                                 (long) statusCode);
@@ -233,14 +226,12 @@ class TracedHttpRequest<T> extends HttpRequest<T> {
                         span.end();
                     })
                     .doOnError(err -> {
-                        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
                         span.recordException(err,
                                 Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                         span.setStatus(StatusCode.ERROR, err.getMessage());
                         span.end();
                     })
                     .doOnDispose(() -> {
-                        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
                         if (span.isRecording()) {
                             span.end();
                         }
