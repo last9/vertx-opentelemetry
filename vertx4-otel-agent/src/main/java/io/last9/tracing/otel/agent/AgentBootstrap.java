@@ -3,10 +3,10 @@ package io.last9.tracing.otel.agent;
 import java.io.File;
 import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
-import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 /**
@@ -45,9 +45,8 @@ import java.util.jar.JarFile;
 public final class AgentBootstrap {
 
     private static final String EMBEDDED_JAR = "inst/agent-impl.jar";
-    // Bootstrap JARs: injected onto the bootstrap classloader so our OTel API 1.38.0
-    // shadows any older version the app carries (e.g. opentelemetry-api:1.18.0 from
-    // vertx-opentelemetry:4.5.x). Context must be injected before API.
+    // Context must be listed before API — API classes import io.opentelemetry.context.*
+    // so Context must be on the bootstrap classpath first.
     private static final String[] BOOTSTRAP_JARS = {
         "inst/bootstrap-opentelemetry-context.jar",
         "inst/bootstrap-opentelemetry-api.jar"
@@ -68,12 +67,16 @@ public final class AgentBootstrap {
      */
     public static void premain(String agentArgs, Instrumentation inst) {
         try {
-            // Step 1: OTel API on bootstrap — MUST be first, before any OTel class can load.
-            // appendToBootstrapClassLoaderSearch wins over system CL because all classloaders
-            // delegate to bootstrap first (parent delegation). This shadows the app's older
-            // opentelemetry-api (e.g. 1.18.0 from vertx-opentelemetry:4.5.x) everywhere.
-            bootstrapInjectOtelApi(inst);
-            injectLibraryOntoSystemClassLoader(inst);
+            File agentJarFile = new File(AgentBootstrap.class.getProtectionDomain()
+                    .getCodeSource().getLocation().toURI());
+            JarFile agentJar = new JarFile(agentJarFile);
+            try {
+                // Must be first — shadows the app's OTel API before any class loads.
+                bootstrapInjectOtelApi(inst, agentJar);
+                injectLibraryOntoSystemClassLoader(inst, agentJar);
+            } finally {
+                agentJar.close();
+            }
             storeInstrumentationOnAppClassLoader(inst);
             installTransformers(inst);
             initializeOnAppClassLoader();
@@ -98,63 +101,46 @@ public final class AgentBootstrap {
      * <p>Bootstrap is the top of the classloader hierarchy — all classloaders delegate to it
      * first (parent delegation). Placing our OTel API 1.38.0 here means every classloader
      * in the JVM sees it, regardless of what older version the app has on its own classpath.
-     *
-     * <p>This specifically fixes the case where {@code vertx-opentelemetry:4.5.x} brings
-     * {@code opentelemetry-api:1.18.0} transitively. Without this, {@code appendToSystemClassLoaderSearch}
-     * puts us LAST, so 1.18.0 wins and {@code getLogsBridge()} (added in 1.27.0) is absent,
-     * crashing startup with {@code NoSuchMethodError}.
      */
-    private static void bootstrapInjectOtelApi(Instrumentation inst) throws Exception {
-        File agentJarFile = new File(AgentBootstrap.class.getProtectionDomain()
-                .getCodeSource().getLocation().toURI());
-        JarFile agentJar = new JarFile(agentJarFile);
-        try {
-            for (String resource : BOOTSTRAP_JARS) {
-                java.util.jar.JarEntry entry = agentJar.getJarEntry(resource);
-                if (entry == null) {
-                    log("[Last9 OTel Agent v4] WARNING: Bootstrap JAR not found in agent: " + resource);
-                    continue;
-                }
-                InputStream stream = agentJar.getInputStream(entry);
-                Path tempJar = Files.createTempFile("last9-bootstrap-", ".jar");
-                tempJar.toFile().deleteOnExit();
-                Files.copy(stream, tempJar, StandardCopyOption.REPLACE_EXISTING);
-                stream.close();
-                inst.appendToBootstrapClassLoaderSearch(new JarFile(tempJar.toFile()));
+    private static void bootstrapInjectOtelApi(Instrumentation inst, JarFile agentJar)
+            throws Exception {
+        for (String resource : BOOTSTRAP_JARS) {
+            Path tempJar = extractEmbeddedJar(agentJar, resource);
+            if (tempJar == null) {
+                log("[Last9 OTel Agent v4] WARNING: Bootstrap JAR not found in agent: " + resource);
+                continue;
             }
-            log("[Last9 OTel Agent v4] OTel API 1.38.0 injected onto bootstrap classloader"
-                    + " (shadows any older version on app classpath)");
-        } finally {
-            agentJar.close();
+            inst.appendToBootstrapClassLoaderSearch(new JarFile(tempJar.toFile()));
         }
+        log("[Last9 OTel Agent v4] OTel API 1.38.0 injected onto bootstrap classloader"
+                + " (shadows any older version on app classpath)");
     }
 
-    private static void injectLibraryOntoSystemClassLoader(Instrumentation inst)
+    private static void injectLibraryOntoSystemClassLoader(Instrumentation inst, JarFile agentJar)
             throws Exception {
-        URL agentJarUrl = AgentBootstrap.class.getProtectionDomain()
-                .getCodeSource().getLocation();
-        File agentJarFile = new File(agentJarUrl.toURI());
-
-        JarFile agentJar = new JarFile(agentJarFile);
-        try {
-            InputStream embeddedStream = agentJar.getInputStream(
-                    agentJar.getJarEntry(EMBEDDED_JAR));
-
-            if (embeddedStream == null) {
-                throw new IllegalStateException(
-                        "Embedded JAR not found in agent: " + EMBEDDED_JAR);
-            }
-
-            Path tempJar = Files.createTempFile("last9-otel-v4-agent-", ".jar");
-            tempJar.toFile().deleteOnExit();
-            Files.copy(embeddedStream, tempJar, StandardCopyOption.REPLACE_EXISTING);
-            embeddedStream.close();
-
-            inst.appendToSystemClassLoaderSearch(new JarFile(tempJar.toFile()));
-            log("[Last9 OTel Agent v4] Library classes injected onto system classloader");
-        } finally {
-            agentJar.close();
+        Path tempJar = extractEmbeddedJar(agentJar, EMBEDDED_JAR);
+        if (tempJar == null) {
+            throw new IllegalStateException("Embedded JAR not found in agent: " + EMBEDDED_JAR);
         }
+        inst.appendToSystemClassLoaderSearch(new JarFile(tempJar.toFile()));
+        log("[Last9 OTel Agent v4] Library classes injected onto system classloader");
+    }
+
+    /**
+     * Extracts a named entry from the agent JAR to a temp file and returns its path.
+     * Returns {@code null} if the entry does not exist in the JAR.
+     */
+    private static Path extractEmbeddedJar(JarFile agentJar, String resource) throws Exception {
+        JarEntry entry = agentJar.getJarEntry(resource);
+        if (entry == null) return null;
+        Path tempJar = Files.createTempFile("last9-agent-", ".jar");
+        // deleteOnExit is best-effort (no-op on SIGKILL). The JVM keeps the bytes
+        // accessible via the open JarFile handle regardless of file-system deletion.
+        tempJar.toFile().deleteOnExit();
+        try (InputStream stream = agentJar.getInputStream(entry)) {
+            Files.copy(stream, tempJar, StandardCopyOption.REPLACE_EXISTING);
+        }
+        return tempJar;
     }
 
     private static void storeInstrumentationOnAppClassLoader(Instrumentation inst)

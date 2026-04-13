@@ -140,18 +140,12 @@ public final class OtelSdkSetup {
             // 3. Auto-install log-trace correlation (MdcTraceTurboFilter + OTel appender)
             //    if not already configured in logback.xml. This enables zero-config
             //    log-trace correlation for agent-only deployments.
-            autoInstallLogCorrelation();
+            boolean logsBridgeAvailable = isLogsBridgeAvailable();
+            autoInstallLogCorrelation(logsBridgeAvailable);
 
             // 4. Set the OTel SDK instance on all OpenTelemetryAppender instances
             //    (both those from logback.xml and any we just auto-installed).
-            //    Guarded: OpenTelemetryAppender calls OpenTelemetry.getLogsBridge() on every
-            //    append() — a method added in OTel API 1.27.0. Apps with vertx-opentelemetry:4.5.x
-            //    pull in opentelemetry-api:1.18.0 which loads BEFORE the agent's 1.38.0 bundle
-            //    (appendToSystemClassLoaderSearch puts agent last). If an appender is installed
-            //    under those conditions, the very next log statement crashes with NoSuchMethodError.
-            //    We skip all OpenTelemetryAppender usage when API < 1.27.0 is detected; MdcTraceTurboFilter
-            //    and traces still work normally.
-            if (isLogsBridgeAvailable()) {
+            if (logsBridgeAvailable) {
                 OpenTelemetryAppender.install(openTelemetry);
                 log.info("Logback OpenTelemetry appender installed for log export");
             } else {
@@ -187,9 +181,9 @@ public final class OtelSdkSetup {
      * <p>If the user has already configured these in their logback.xml, duplicates are not added.
      * If Logback is not the SLF4J binding (e.g. Log4j2, JUL), this method silently skips.
      */
-    private static void autoInstallLogCorrelation() {
+    private static void autoInstallLogCorrelation(boolean logsBridgeAvailable) {
         try {
-            doAutoInstallLogCorrelation();
+            doAutoInstallLogCorrelation(logsBridgeAvailable);
         } catch (Throwable t) {
             // Logback not on classpath, or incompatible version — skip silently
             log.debug("Auto log-trace correlation skipped: {}", t.getMessage());
@@ -200,7 +194,7 @@ public final class OtelSdkSetup {
      * Internal method that references Logback classes directly. Isolated so that
      * {@link NoClassDefFoundError} is caught by the caller if Logback is absent.
      */
-    private static void doAutoInstallLogCorrelation() {
+    private static void doAutoInstallLogCorrelation(boolean logsBridgeAvailable) {
         if (!(org.slf4j.LoggerFactory.getILoggerFactory()
                 instanceof ch.qos.logback.classic.LoggerContext)) {
             log.debug("Non-Logback SLF4J binding — skipping auto log correlation");
@@ -222,9 +216,8 @@ public final class OtelSdkSetup {
         }
 
         // Auto-install OpenTelemetryAppender on root logger if not already present.
-        // Skip if OTel API < 1.27.0: the appender calls getLogsBridge() on every append(),
-        // so installing it when 1.18.0 is on the classpath would crash on the very next log call.
-        if (isLogsBridgeAvailable()) {
+        // Skip if OTel API < 1.27.0 (getLogsBridge absent) — appender calls it on every append().
+        if (logsBridgeAvailable) {
             ch.qos.logback.classic.Logger rootLogger =
                     ctx.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
             boolean hasOtelAppender = false;
@@ -250,14 +243,13 @@ public final class OtelSdkSetup {
     }
 
     /**
-     * Returns {@code true} if the {@code io.opentelemetry.api.OpenTelemetry} interface loaded on
-     * the current classpath declares {@code getLogsBridge()} (added in OTel API 1.27.0).
+     * Returns {@code true} if {@code getLogsBridge()} (added in OTel API 1.27.0) is present
+     * on the currently loaded {@code io.opentelemetry.api.OpenTelemetry} interface.
      *
-     * <p>This can be {@code false} when an app bundles {@code vertx-opentelemetry:4.5.x} which
-     * pulls in {@code opentelemetry-api:1.18.0} — that older version loads before the agent's
-     * bundled 1.38.0 (because {@code appendToSystemClassLoaderSearch} puts the agent last).
-     * Any code that calls {@code OpenTelemetry.getLogsBridge()} against 1.18.0 will throw a
-     * {@code NoSuchMethodError}; checking this flag first lets us degrade gracefully.
+     * <p>In agent deployments this always returns {@code true} because the agent injects
+     * OTel API 1.38.0 onto the bootstrap classloader before SDK init, shadowing any older
+     * version the app carries. The guard exists for standalone (non-agent) library use where
+     * the app may supply an older OTel API that lacks {@code getLogsBridge()}.
      */
     private static boolean isLogsBridgeAvailable() {
         try {
