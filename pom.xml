@@ -397,22 +397,17 @@
                                         <pattern>kotlin</pattern>
                                         <shadedPattern>io.last9.internal.kotlin</shadedPattern>
                                     </relocation>
-                                    <!-- Relocate the entire OpenTelemetry namespace to avoid
-                                         classpath conflicts when apps bundle their own OTel SDK,
-                                         API, semconv, or instrumentation API. Without this,
-                                         the app's OTel classes load first (appendToSystemCL puts
-                                         ours last) and may be incompatible — causing silent
-                                         NoClassDefFoundError/NoSuchFieldError in agent helpers.
-                                         This makes the agent immune to ANY OTel version on the
-                                         app classpath, matching the Datadog agent's isolation model.
-                                         Note: vertx-opentelemetry and vertx-micrometer-metrics
-                                         are NOT relocated at the package level (Vert.x SPI loads
-                                         them by class name), but their internal OTel references
-                                         ARE rewritten to the relocated namespace. -->
-                                    <relocation>
-                                        <pattern>io.opentelemetry</pattern>
-                                        <shadedPattern>io.last9.internal.otel</shadedPattern>
-                                    </relocation>
+                                    <!-- Do NOT relocate io.opentelemetry — Vert.x 4's
+                                         OpenTelemetryOptions (from vertx-opentelemetry, loaded
+                                         first on the app's classpath) requires a constructor
+                                         argument of type io.opentelemetry.api.OpenTelemetry.
+                                         Relocating to io.last9.internal.otel causes a
+                                         NoSuchMethodException because the agent's OTel type
+                                         and the Vert.x SPI's expected type are in different
+                                         namespaces. Using the original namespace means both the
+                                         agent and vertx-opentelemetry share the same OTel API
+                                         classes, which is required for the VertxTracer SPI
+                                         (HTTP server/client, EventBus, Kafka spans) to work. -->
                                 </relocations>
                                 <transformers>
                                     <!-- Merge META-INF/services SPI files from all bundled JARs.

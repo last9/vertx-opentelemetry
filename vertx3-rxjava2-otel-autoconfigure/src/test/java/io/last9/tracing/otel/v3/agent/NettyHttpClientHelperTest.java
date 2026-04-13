@@ -28,18 +28,20 @@ class NettyHttpClientHelperTest {
         otel = new GlobalOtelTestSetup();
         otel.setUp();
         spanExporter = otel.getSpanExporter();
-        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
     }
 
     @AfterEach
     void tearDown() {
-        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.remove();
         otel.tearDown();
     }
 
     // --- Stub classes that expose methods the helper calls via reflection ---
 
-    /** Stub HTTP request with method(), getHost(), uri(), getPort(), putHeader(). */
+    /**
+     * Stub HTTP request with method(), getHost(), uri(), getPort(), putHeader(),
+     * and headers() — the latter is used by hasHeader() to detect pre-injected
+     * traceparent headers.
+     */
     @SuppressWarnings("unused")
     static class StubHttpRequest {
         private final String httpMethod;
@@ -60,6 +62,8 @@ class NettyHttpClientHelperTest {
         public String uri() { return uri; }
         public int getPort() { return port; }
         public void putHeader(String key, String value) { headers.put(key, value); }
+        /** Mirrors HttpClientRequest.headers() — returns the mutable header map. */
+        public Map<String, String> headers() { return headers; }
     }
 
     /**
@@ -75,15 +79,18 @@ class NettyHttpClientHelperTest {
         public String uri() { return "/v1/secrets/data/myapp"; }
         public int getPort() { return 8200; }
         public void putHeader(String key, String value) { headers.put(key, value); }
+        public Map<String, String> headers() { return headers; }
     }
 
     /** Stub HTTP request WITHOUT putHeader — tests silent failure of injection. */
     @SuppressWarnings("unused")
     static class StubHttpRequestNoPutHeader {
+        final Map<String, String> headers = new HashMap<>();
         public Object method() { return "GET"; }
         public String getHost() { return "host"; }
         public String uri() { return "/path"; }
         public int getPort() { return 80; }
+        public Map<String, String> headers() { return headers; }
     }
 
     /** Stub HTTP response with statusCode(). */
@@ -103,7 +110,6 @@ class NettyHttpClientHelperTest {
         Span span = NettyHttpClientHelper.startSpan(request);
         assertThat(span).isNotNull();
 
-        // Complete via handleResponse to clean up IN_FLIGHT
         NettyHttpClientHelper.exitSend(request, span, span.makeCurrent(), null);
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
 
@@ -128,26 +134,60 @@ class NettyHttpClientHelperTest {
         Span span = NettyHttpClientHelper.startSpan(request);
         assertThat(span).isNotNull();
 
-        // traceparent should have been injected via putHeader reflection
         assertThat(request.headers).containsKey("traceparent");
         String traceparent = request.headers.get("traceparent");
         assertThat(traceparent).startsWith("00-");
         assertThat(traceparent.split("-")).hasSize(4);
 
-        // Clean up
         NettyHttpClientHelper.exitSend(request, span, span.makeCurrent(), null);
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
     }
 
+    /**
+     * Regression test: when TracedWebClient already injected a {@code traceparent} header
+     * (at assembly time, before end() fires), the Netty advice must NOT create a duplicate
+     * CLIENT span.
+     *
+     * <p>Old approach used an {@code IN_HTTP_CLIENT_CALL} ThreadLocal guard that had a timing
+     * problem — the flag was reset before end() was called. New approach checks for the
+     * {@code traceparent} header directly on the request object, which is set at assembly
+     * time and persists until end() fires. This test fails on the old code and passes on
+     * the new code.
+     */
     @Test
-    void startSpanReturnsNullWhenGuardIsSet() {
-        NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(true);
+    void startSpanReturnsNullWhenTraceparentAlreadyPresent() {
+        StubHttpRequest request = new StubHttpRequest("GET", "pricing-service", "/v1/price/AAPL", 8081);
 
-        StubHttpRequest request = new StubHttpRequest("GET", "host", "/path", 80);
+        // Simulate TracedWebClient injecting traceparent into the request headers
+        // at assembly time (before end() fires). This is what TracedHttpRequest.wrapWithSpan()
+        // does via delegate.putHeader("traceparent", ...).
+        request.headers.put("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
+
+        // Netty advice fires at end() — should detect the pre-existing traceparent and skip.
         Span span = NettyHttpClientHelper.startSpan(request);
 
-        assertThat(span).isNull();
-        assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
+        assertThat(span)
+                .as("startSpan must return null when traceparent is already on the request")
+                .isNull();
+        assertThat(spanExporter.getFinishedSpanItems())
+                .as("no CLIENT span should be created when TracedWebClient already handles it")
+                .isEmpty();
+    }
+
+    @Test
+    void startSpanCreatesSpanWhenNoTraceparentPresent() {
+        // Raw HttpClient call (no TracedWebClient) — no pre-injected traceparent
+        StubHttpRequest request = new StubHttpRequest("GET", "external.api", "/data", 443);
+
+        Span span = NettyHttpClientHelper.startSpan(request);
+
+        assertThat(span)
+                .as("startSpan must create a CLIENT span when no traceparent is present")
+                .isNotNull();
+
+        NettyHttpClientHelper.exitSend(request, span, span.makeCurrent(), null);
+        NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
+        assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
     }
 
     @Test
@@ -182,7 +222,6 @@ class NettyHttpClientHelperTest {
     void startSpanDoesNotCrashWhenPutHeaderAbsent() {
         StubHttpRequestNoPutHeader request = new StubHttpRequestNoPutHeader();
 
-        // Should not throw — HEADER_SETTER silently catches the exception
         Span span = NettyHttpClientHelper.startSpan(request);
         assertThat(span).isNotNull();
 
@@ -203,7 +242,6 @@ class NettyHttpClientHelperTest {
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
-        // Should use host() fallback, not "unknown"
         assertThat(sd.getName()).isEqualTo("GET vault.internal");
         assertThat(sd.getAttributes().get(AttributeKey.stringKey("net.peer.name")))
                 .isEqualTo("vault.internal");
@@ -297,24 +335,18 @@ class NettyHttpClientHelperTest {
     // --- exitSend tests ---
 
     @Test
-    void exitSendClearsGuardRegardlessOfOutcome() {
+    void exitSendDoesNotEndSpanOnSuccess() {
         StubHttpRequest request = new StubHttpRequest("GET", "host", "/", 80);
         Span span = NettyHttpClientHelper.startSpan(request);
-
-        // Guard should be set after startSpan
-        assertThat(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get()).isTrue();
 
         Scope scope = span.makeCurrent();
         NettyHttpClientHelper.exitSend(request, span, scope, null);
 
-        // Guard should be cleared
-        assertThat(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get()).isFalse();
-
-        // Span is NOT ended by exitSend (ends on response/exception)
+        // Span is NOT ended by exitSend — it ends when the response arrives
         assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
 
-        // Clean up
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
+        assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
     }
 
     @Test
@@ -323,19 +355,17 @@ class NettyHttpClientHelperTest {
         Span span = NettyHttpClientHelper.startSpan(request);
         Scope scope = span.makeCurrent();
 
-        // Simulate end() throwing an exception
         NettyHttpClientHelper.exitSend(request, span, scope, new RuntimeException("write error"));
 
-        // Span should be ended immediately since end() failed
         List<SpanData> spans = spanExporter.getFinishedSpanItems();
         assertThat(spans).hasSize(1);
 
         SpanData sd = spans.get(0);
         assertThat(sd.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
 
-        // handleResponse should be a no-op now (entry was cleaned from IN_FLIGHT)
+        // handleResponse is a no-op now — entry was cleaned from IN_FLIGHT
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
-        assertThat(spanExporter.getFinishedSpanItems()).hasSize(1); // still 1, not 2
+        assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
     }
 
     // --- Full lifecycle tests ---
@@ -350,7 +380,6 @@ class NettyHttpClientHelperTest {
         Scope scope = span.makeCurrent();
         NettyHttpClientHelper.exitSend(request, span, scope, null);
 
-        // No span finished yet — waiting for response
         assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
 
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(201));
@@ -420,7 +449,6 @@ class NettyHttpClientHelperTest {
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
         assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
 
-        // Second call should be a no-op (entry already removed from IN_FLIGHT)
         NettyHttpClientHelper.handleResponse(request, new StubHttpResponse(200));
         assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
     }

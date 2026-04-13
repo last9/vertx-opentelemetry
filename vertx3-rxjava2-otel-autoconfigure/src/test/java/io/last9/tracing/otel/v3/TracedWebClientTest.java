@@ -1,6 +1,5 @@
 package io.last9.tracing.otel.v3;
 
-import io.last9.tracing.otel.v3.agent.NettyHttpClientHelper;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.context.Scope;
@@ -22,7 +21,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -564,55 +562,6 @@ class TracedWebClientTest {
         } finally {
             parentSpan.end();
         }
-
-        assertThat(testCtx.awaitCompletion(5, TimeUnit.SECONDS)).isTrue();
-    }
-
-    /**
-     * Verifies that TracedHttpRequest sets IN_HTTP_CLIENT_CALL before calling the delegate
-     * and clears it after. This prevents the Netty-level ByteBuddy advice from creating a
-     * duplicate CLIENT span when both TracedWebClient and the advice are active.
-     */
-    @Test
-    void inHttpClientCallGuardIsSetDuringDelegateSend(Vertx vertx, VertxTestContext testCtx)
-            throws Exception {
-        AtomicBoolean guardWasSetDuringSend = new AtomicBoolean(false);
-
-        Router router = Router.router(vertx);
-        router.get("/api/guard-check").handler(ctx -> {
-            // Check flag state during request handling (guard should be false here —
-            // it's only true during the synchronous end() call on the event loop, not
-            // during server-side request processing)
-            ctx.response().setStatusCode(200).end("ok");
-        });
-
-        int port = vertx.createHttpServer()
-                .requestHandler(router)
-                .rxListen(0)
-                .blockingGet()
-                .actualPort();
-
-        WebClient traced = TracedWebClient.wrap(WebClient.create(vertx), otel.getOpenTelemetry());
-
-        // Before send, guard must be false
-        assertThat(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get()).isFalse();
-
-        traced.getAbs("http://localhost:" + port + "/api/guard-check")
-                .rxSend()
-                .subscribe(response -> {
-                    testCtx.verify(() -> {
-                        // After send completes, guard must be reset to false
-                        assertThat(NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.get()).isFalse();
-
-                        // CLIENT span created once (not doubled)
-                        waitForSpans(1);
-                        long clientSpanCount = spanExporter.getFinishedSpanItems().stream()
-                                .filter(s -> s.getKind() == SpanKind.CLIENT)
-                                .count();
-                        assertThat(clientSpanCount).isEqualTo(1);
-                    });
-                    testCtx.completeNow();
-                }, testCtx::failNow);
 
         assertThat(testCtx.awaitCompletion(5, TimeUnit.SECONDS)).isTrue();
     }

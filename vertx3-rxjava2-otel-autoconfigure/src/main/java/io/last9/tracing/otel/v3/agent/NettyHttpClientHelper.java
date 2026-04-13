@@ -28,21 +28,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * occurs ({@code handleException}), the span is completed with the response
  * status code or error details.
  *
- * <p>Uses the {@link AgentGuard} to prevent double-instrumentation when the user
- * also uses the WebClient (which is already instrumented separately).
+ * <p>Duplicate-span prevention: if {@link io.last9.tracing.otel.v3.TracedWebClient} already
+ * instrumented the request, it injects a {@code traceparent} header at assembly time.
+ * {@link #startSpan} checks for the presence of that header on the underlying
+ * {@code HttpClientRequestImpl} and skips Netty-level span creation when found.
+ * This is request-scoped (not thread-local), so it works correctly across thread
+ * switches and async boundaries.
  */
 public final class NettyHttpClientHelper {
 
     private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
-
-    /**
-     * Guard to prevent double CLIENT span when both {@link io.last9.tracing.otel.v3.TracedWebClient}
-     * and the Netty-level ByteBuddy advice are active for the same request.
-     * Set to {@code true} by {@link io.last9.tracing.otel.v3.TracedHttpRequest} before calling the
-     * delegate send, so the advice in {@link NettyHttpClientAdvice#onEnter} skips span creation.
-     */
-    public static final ThreadLocal<Boolean> IN_HTTP_CLIENT_CALL =
-            ThreadLocal.withInitial(() -> false);
 
     /**
      * In-flight spans keyed by {@code System.identityHashCode(request)}.
@@ -66,13 +61,20 @@ public final class NettyHttpClientHelper {
     /**
      * Starts a CLIENT span for the given HTTP client request and injects
      * the {@code traceparent} header for distributed tracing.
-     * Returns null if already inside a WebClient traced call.
+     *
+     * <p>Returns {@code null} (suppressed) if the request already has a
+     * {@code traceparent} header, which means {@link io.last9.tracing.otel.v3.TracedWebClient}
+     * already created a CLIENT span for this request. This check is request-scoped
+     * (not thread-local), so it is safe across thread switches and async boundaries.
      *
      * @param request the HttpClientRequestImpl instance
      * @return the span, or null if suppressed
      */
     public static Span startSpan(Object request) {
-        if (IN_HTTP_CLIENT_CALL.get()) {
+        // If TracedWebClient already instrumented this request, it injected
+        // a traceparent header at assembly time. Skip Netty-level span creation
+        // to avoid duplicate CLIENT spans.
+        if (hasHeader(request, "traceparent")) {
             return null;
         }
 
@@ -105,7 +107,6 @@ public final class NettyHttpClientHelper {
         // Store span for response/exception handling
         IN_FLIGHT.put(System.identityHashCode(request), span);
 
-        IN_HTTP_CLIENT_CALL.set(true);
         return span;
     }
 
@@ -121,20 +122,16 @@ public final class NettyHttpClientHelper {
      * @param thrown  non-null if {@code end()} threw an exception
      */
     public static void exitSend(Object request, Span span, Scope scope, Throwable thrown) {
-        try {
-            if (scope != null) {
-                scope.close();
-            }
-            if (thrown != null && span != null) {
-                // end() itself failed — response will never arrive, end span now
-                IN_FLIGHT.remove(System.identityHashCode(request));
-                span.recordException(thrown,
-                        Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
-                span.setStatus(StatusCode.ERROR, thrown.getMessage());
-                span.end();
-            }
-        } finally {
-            IN_HTTP_CLIENT_CALL.set(false);
+        if (scope != null) {
+            scope.close();
+        }
+        if (thrown != null && span != null) {
+            // end() itself failed — response will never arrive, end span now
+            IN_FLIGHT.remove(System.identityHashCode(request));
+            span.recordException(thrown,
+                    Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
+            span.setStatus(StatusCode.ERROR, thrown.getMessage());
+            span.end();
         }
     }
 
@@ -190,6 +187,28 @@ public final class NettyHttpClientHelper {
             return (code instanceof Integer) ? (Integer) code : -1;
         } catch (Exception e) {
             return -1;
+        }
+    }
+
+    /**
+     * Returns true if the given request object already has the named header set.
+     *
+     * <p>Tries {@code get(String)} first (Vert.x {@code MultiMap} signature), then falls
+     * back to {@code get(Object)} (the erased generic signature on {@code java.util.Map}).
+     */
+    private static boolean hasHeader(Object request, String headerName) {
+        try {
+            Object headers = request.getClass().getMethod("headers").invoke(request);
+            if (headers == null) return false;
+            Object value;
+            try {
+                value = headers.getClass().getMethod("get", String.class).invoke(headers, headerName);
+            } catch (NoSuchMethodException e) {
+                value = headers.getClass().getMethod("get", Object.class).invoke(headers, headerName);
+            }
+            return value != null;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 
