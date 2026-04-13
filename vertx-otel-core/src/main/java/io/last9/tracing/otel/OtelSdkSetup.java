@@ -144,8 +144,22 @@ public final class OtelSdkSetup {
 
             // 4. Set the OTel SDK instance on all OpenTelemetryAppender instances
             //    (both those from logback.xml and any we just auto-installed).
-            OpenTelemetryAppender.install(openTelemetry);
-            log.info("Logback OpenTelemetry appender installed for log export");
+            //    Guarded: OpenTelemetryAppender calls OpenTelemetry.getLogsBridge() on every
+            //    append() — a method added in OTel API 1.27.0. Apps with vertx-opentelemetry:4.5.x
+            //    pull in opentelemetry-api:1.18.0 which loads BEFORE the agent's 1.38.0 bundle
+            //    (appendToSystemClassLoaderSearch puts agent last). If an appender is installed
+            //    under those conditions, the very next log statement crashes with NoSuchMethodError.
+            //    We skip all OpenTelemetryAppender usage when API < 1.27.0 is detected; MdcTraceTurboFilter
+            //    and traces still work normally.
+            if (isLogsBridgeAvailable()) {
+                OpenTelemetryAppender.install(openTelemetry);
+                log.info("Logback OpenTelemetry appender installed for log export");
+            } else {
+                log.warn("OTLP log export disabled — OTel API ≥1.27.0 required but an older "
+                        + "version is on the classpath (likely opentelemetry-api:1.18.0 from "
+                        + "vertx-opentelemetry:4.5.x). Upgrade to vertx-opentelemetry 4.5.11+ "
+                        + "or exclude opentelemetry-api from it. Traces and MDC correlation still work.");
+            }
 
             // 5. Register JVM runtime metric observers.
             //    These are no-ops when OTEL_METRICS_EXPORTER is unset (default "none").
@@ -207,27 +221,50 @@ public final class OtelSdkSetup {
             log.info("MdcTraceTurboFilter auto-installed for log-trace correlation");
         }
 
-        // Auto-install OpenTelemetryAppender on root logger if not already present
-        ch.qos.logback.classic.Logger rootLogger =
-                ctx.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
-        boolean hasOtelAppender = false;
-        Iterator<ch.qos.logback.core.Appender<ch.qos.logback.classic.spi.ILoggingEvent>> iter =
-                rootLogger.iteratorForAppenders();
-        while (iter.hasNext()) {
-            if (iter.next().getClass().getName().contains("OpenTelemetryAppender")) {
-                hasOtelAppender = true;
-                break;
+        // Auto-install OpenTelemetryAppender on root logger if not already present.
+        // Skip if OTel API < 1.27.0: the appender calls getLogsBridge() on every append(),
+        // so installing it when 1.18.0 is on the classpath would crash on the very next log call.
+        if (isLogsBridgeAvailable()) {
+            ch.qos.logback.classic.Logger rootLogger =
+                    ctx.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
+            boolean hasOtelAppender = false;
+            Iterator<ch.qos.logback.core.Appender<ch.qos.logback.classic.spi.ILoggingEvent>> iter =
+                    rootLogger.iteratorForAppenders();
+            while (iter.hasNext()) {
+                if (iter.next().getClass().getName().contains("OpenTelemetryAppender")) {
+                    hasOtelAppender = true;
+                    break;
+                }
+            }
+            if (!hasOtelAppender) {
+                OpenTelemetryAppender appender = new OpenTelemetryAppender();
+                appender.setName("OTEL_AUTO");
+                appender.setContext(ctx);
+                appender.setCaptureExperimentalAttributes(true);
+                appender.setCaptureMdcAttributes("*");
+                appender.start();
+                rootLogger.addAppender(appender);
+                log.info("OpenTelemetry log appender auto-installed for OTLP log export");
             }
         }
-        if (!hasOtelAppender) {
-            OpenTelemetryAppender appender = new OpenTelemetryAppender();
-            appender.setName("OTEL_AUTO");
-            appender.setContext(ctx);
-            appender.setCaptureExperimentalAttributes(true);
-            appender.setCaptureMdcAttributes("*");
-            appender.start();
-            rootLogger.addAppender(appender);
-            log.info("OpenTelemetry log appender auto-installed for OTLP log export");
+    }
+
+    /**
+     * Returns {@code true} if the {@code io.opentelemetry.api.OpenTelemetry} interface loaded on
+     * the current classpath declares {@code getLogsBridge()} (added in OTel API 1.27.0).
+     *
+     * <p>This can be {@code false} when an app bundles {@code vertx-opentelemetry:4.5.x} which
+     * pulls in {@code opentelemetry-api:1.18.0} — that older version loads before the agent's
+     * bundled 1.38.0 (because {@code appendToSystemClassLoaderSearch} puts the agent last).
+     * Any code that calls {@code OpenTelemetry.getLogsBridge()} against 1.18.0 will throw a
+     * {@code NoSuchMethodError}; checking this flag first lets us degrade gracefully.
+     */
+    private static boolean isLogsBridgeAvailable() {
+        try {
+            Class.forName("io.opentelemetry.api.OpenTelemetry").getMethod("getLogsBridge");
+            return true;
+        } catch (NoSuchMethodException | ClassNotFoundException e) {
+            return false;
         }
     }
 
