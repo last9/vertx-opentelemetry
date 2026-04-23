@@ -25,9 +25,9 @@ import static net.bytebuddy.matcher.ElementMatchers.*;
  * <ul>
  *   <li>{@code Router.router(Vertx)} — installs SERVER span handlers (via
  *       {@link io.last9.tracing.otel.v3.TracedRouter})</li>
- *   <li>{@code WebClient.create(Vertx)} and {@code WebClient.create(Vertx, WebClientOptions)}
- *       — wraps with {@link io.last9.tracing.otel.v3.TracedWebClient} for CLIENT spans
- *       and {@code traceparent} injection</li>
+ *   <li>All outgoing HTTP via {@code HttpClientRequestImpl.end()} (Netty level) — creates
+ *       CLIENT spans and injects {@code traceparent}. This covers WebClient, HttpClient,
+ *       and any other Vert.x HTTP client usage without changing the WebClient class identity.</li>
  * </ul>
  *
  * <h2>Raw client library instrumentation</h2>
@@ -120,18 +120,14 @@ public final class Vertx3Instrumenter {
                                         .and(takesArgument(0,
                                                 named("io.vertx.core.Vertx"))))))
 
-                // WebClient.create(Vertx), create(Vertx, WebClientOptions), wrap(WebClient)
-                // → wrap result with TracedWebClient for CLIENT spans.
-                // WebClient.wrap() is also a static factory method; intercepting it ensures
-                // apps that create clients via wrap() are instrumented without code changes.
-                .type(named("io.vertx.reactivex.ext.web.client.WebClient"))
-                .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                        builder.visit(Advice.to(WebClientAdvice.class)
-                                .on(isStatic()
-                                        .and(named("create").or(named("wrap")))
-                                        .and(returns(named(
-                                                "io.vertx.reactivex.ext.web.client.WebClient"))))))
-
+                // NOTE: WebClient.create() is intentionally NOT intercepted here.
+                // Wrapping WebClient.create() with TracedWebClient changes the concrete
+                // class of the returned object. Code that uses object.getClass().getName()
+                // as a key (e.g. ContextUtils.setInstance) stores under "TracedWebClient"
+                // but retrieves under "WebClient", producing null. CLIENT spans and
+                // traceparent injection are handled by NettyHttpClientHelper at the
+                // HttpClientRequestImpl.end() level, which covers ALL outgoing HTTP
+                // regardless of how the WebClient was created.
                 .installOn(inst);
 
         log.info("Vertx3Instrumenter: bytecode instrumentation installed (Router, WebClient)");
