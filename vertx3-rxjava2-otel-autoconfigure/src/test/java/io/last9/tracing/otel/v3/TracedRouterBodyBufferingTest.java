@@ -1,8 +1,10 @@
 package io.last9.tracing.otel.v3;
 
 import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.sdk.trace.data.SpanData;
+import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
+import io.opentelemetry.sdk.trace.data.SpanData;
 import io.reactivex.plugins.RxJavaPlugins;
 import io.vertx.core.json.JsonObject;
 import io.vertx.junit5.VertxExtension;
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TracedRouterBodyBufferingTest {
 
     private TestOtelSetup otel;
+    private InMemorySpanExporter spanExporter;
     private Vertx vertx;
     private WebClient webClient;
     private int port;
@@ -53,15 +57,18 @@ class TracedRouterBodyBufferingTest {
     @BeforeEach
     void setUp(VertxTestContext testContext) throws Exception {
         RxJavaPlugins.reset();
-        TestOtelSetup.resetRxJava2InstalledFlag();
+        resetInstalledFlag();
 
         otel = new TestOtelSetup();
+        spanExporter = otel.getSpanExporter();
         vertx = Vertx.vertx();
         webClient = WebClient.create(vertx);
         RxJava2ContextPropagation.install();
 
         Router router = TracedRouter.create(vertx, otel.getOpenTelemetry());
 
+        // Correct pattern: route-level BodyHandler + ctx.get("otel.span").
+        // This is how AbstractReqResRoute-style routes should be set up.
         router.post("/api/data")
                 .handler(BodyHandler.create())
                 .handler(ctx -> {
@@ -77,14 +84,17 @@ class TracedRouterBodyBufferingTest {
         router.get("/api/query").handler(ctx ->
                 ctx.response().end(ctx.queryParam("q").stream().findFirst().orElse("empty")));
 
+        // POST route that also verifies span is accessible and trace context is propagatable.
         router.post("/api/span-check")
                 .handler(BodyHandler.create())
                 .handler(ctx -> {
-                    Span span = ctx.get(TracedRouter.SPAN_KEY);
+                    // Span is stored in RoutingContext — retrieve it directly.
+                    Span span = ctx.get("otel.span");
                     String traceId = (span != null)
                             ? span.getSpanContext().getTraceId()
                             : "no-span";
 
+                    // Re-activate span to prove it can be used for outgoing calls.
                     String activatedTraceId = "not-activated";
                     if (span != null) {
                         try (Scope ignored = span.makeCurrent()) {
@@ -92,8 +102,9 @@ class TracedRouterBodyBufferingTest {
                         }
                     }
 
-                    JsonObject reqBody = ctx.getBodyAsJson();
-                    String key = reqBody != null ? reqBody.getString("k", "missing") : "null";
+                    String key = ctx.getBodyAsJson() != null
+                            ? ctx.getBodyAsJson().getString("k", "missing")
+                            : "null";
 
                     ctx.response().putHeader("content-type", "application/json")
                             .end(new JsonObject()
@@ -141,7 +152,7 @@ class TracedRouterBodyBufferingTest {
                                     .isEqualTo(200);
                             assertThat(resp.bodyAsString()).isEqualTo("hello");
 
-                            SpanData span = otel.waitForServerSpan();
+                            SpanData span = waitForServerSpan();
                             assertThat(span.getName()).isEqualTo("POST /api/data");
                             testContext.completeNow();
                         }),
@@ -169,7 +180,7 @@ class TracedRouterBodyBufferingTest {
     }
 
     /**
-     * Span is accessible via ctx.get(TracedRouter.SPAN_KEY) in a POST handler that uses BodyHandler,
+     * Span is accessible via ctx.get("otel.span") in a POST handler that uses BodyHandler,
      * and can be re-activated with span.makeCurrent() for outgoing call propagation.
      */
     @Test
@@ -200,5 +211,28 @@ class TracedRouterBodyBufferingTest {
                         testContext::failNow
                 );
         assertThat(testContext.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
+    // ---- helpers ----
+
+    private SpanData waitForServerSpan() {
+        for (int i = 0; i < 100; i++) {
+            List<SpanData> spans = spanExporter.getFinishedSpanItems().stream()
+                    .filter(s -> s.getKind() == SpanKind.SERVER)
+                    .toList();
+            if (!spans.isEmpty()) return spans.get(0);
+            try { Thread.sleep(50); } catch (InterruptedException e) { break; }
+        }
+        throw new AssertionError("No SERVER span after 5 seconds");
+    }
+
+    private void resetInstalledFlag() {
+        try {
+            var field = RxJava2ContextPropagation.class.getDeclaredField("installed");
+            field.setAccessible(true);
+            ((java.util.concurrent.atomic.AtomicBoolean) field.get(null)).set(false);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 }
