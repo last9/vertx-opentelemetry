@@ -43,7 +43,7 @@ class TracedRouterIsolationTest {
     @BeforeEach
     void setUp(VertxTestContext testContext) throws Exception {
         RxJavaPlugins.reset();
-        resetInstalledFlag();
+        TestOtelSetup.resetRxJava2InstalledFlag();
 
         otel = new TestOtelSetup();
         spanExporter = otel.getSpanExporter();
@@ -326,13 +326,4 @@ class TracedRouterIsolationTest {
         }
     }
 
-    private void resetInstalledFlag() {
-        try {
-            var field = RxJava2ContextPropagation.class.getDeclaredField("installed");
-            field.setAccessible(true);
-            ((java.util.concurrent.atomic.AtomicBoolean) field.get(null)).set(false);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to reset installed flag", e);
-        }
-    }
 }

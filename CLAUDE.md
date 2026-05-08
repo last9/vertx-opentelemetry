@@ -110,11 +110,15 @@ All third-party libraries that the app might also bundle MUST be relocated in th
 ### Currently relocated:
 | Package | Relocated to | Why |
 |---------|-------------|-----|
-| `io.opentelemetry` | `io.last9.internal.otel` | App may bundle OTel SDK/API/semconv |
 | `net.bytebuddy` | `io.last9.internal.bytebuddy` | App may bundle ByteBuddy (Mockito, Hibernate) |
 | `okhttp3` | `io.last9.internal.okhttp3` | App may bundle OkHttp (Retrofit, AWS SDK) |
 | `okio` | `io.last9.internal.okio` | Transitive from OkHttp |
 | `kotlin` | `io.last9.internal.kotlin` | Transitive from OkHttp |
+
+### NOT relocated (intentional):
+| Package | Reason |
+|---------|--------|
+| `io.opentelemetry` | Vert.x 4's `OpenTelemetryOptions` (from app's `vertx-opentelemetry`) takes `io.opentelemetry.api.OpenTelemetry`. Relocating creates a `NoSuchMethodException` because the app's type and the agent's relocated type are in different namespaces. Both agent and Vert.x SPI must share the same OTel API classes for `VertxTracer` (HTTP/Kafka spans) to work. |
 
 ### NEVER relocate (agent advice interacts with app's actual objects):
 - `io.vertx.*` — Vert.x core, web, kafka, redis

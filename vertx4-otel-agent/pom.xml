@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-        <version>2.3.4</version>
+    <version>2.3.5-beta.8</version>
     </parent>
 
     <artifactId>vertx4-otel-agent</artifactId>
@@ -29,6 +29,21 @@
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
+
+        <!-- OTel API + Context — provided so maven-dependency-plugin:copy can resolve them.
+             These are NOT bundled into the agent JAR (they're embedded as bootstrap JARs in inst/).
+             Bootstrap injection ensures our 1.38.0 shadows any older version the app carries
+             (e.g. opentelemetry-api:1.18.0 from vertx-opentelemetry:4.5.x). -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-context</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -42,6 +57,43 @@
                 <configuration>
                     <release>8</release>
                 </configuration>
+            </plugin>
+
+            <!-- Copy OTel API + Context JARs for bootstrap classloader injection.
+                 These are embedded in inst/ and injected via appendToBootstrapClassLoaderSearch
+                 at premain time, ensuring our 1.38.0 shadows any older version the app carries. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-bootstrap-jars</id>
+                        <phase>prepare-package</phase>
+                        <goals><goal>copy</goal></goals>
+                        <configuration>
+                            <artifactItems>
+                                <!-- Context MUST be listed before API — API classes import
+                                     io.opentelemetry.context.* so Context must be on the
+                                     bootstrap classpath first. -->
+                                <artifactItem>
+                                    <groupId>io.opentelemetry</groupId>
+                                    <artifactId>opentelemetry-context</artifactId>
+                                    <version>${opentelemetry.version}</version>
+                                    <outputDirectory>${project.build.outputDirectory}/inst</outputDirectory>
+                                    <destFileName>bootstrap-opentelemetry-context.jar</destFileName>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>io.opentelemetry</groupId>
+                                    <artifactId>opentelemetry-api</artifactId>
+                                    <version>${opentelemetry.version}</version>
+                                    <outputDirectory>${project.build.outputDirectory}/inst</outputDirectory>
+                                    <destFileName>bootstrap-opentelemetry-api.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <!-- Embed the library fat JAR inside inst/ directory.
