@@ -6,7 +6,6 @@ import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
-import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.vertx.junit5.VertxExtension;
 import io.vertx.junit5.VertxTestContext;
@@ -18,7 +17,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,7 +33,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SpanNameUpdaterTest {
 
     private TestOtelSetup otel;
-    private InMemorySpanExporter spanExporter;
     private Vertx vertx;
     private WebClient webClient;
 
@@ -48,7 +45,6 @@ class SpanNameUpdaterTest {
     @BeforeEach
     void setUp(VertxTestContext ctx) throws Exception {
         otel = new TestOtelSetup();
-        spanExporter = otel.getSpanExporter();
         vertx = Vertx.vertx();
         webClient = WebClient.create(vertx);
         Tracer tracer = otel.getOpenTelemetry().getTracer("test");
@@ -95,7 +91,7 @@ class SpanNameUpdaterTest {
         webClient.get(portDirect, "localhost", "/api/users/42").rxSend()
                 .subscribe(resp -> {
                     ctx.verify(() -> {
-                        SpanData span = waitForServerSpan();
+                        SpanData span = otel.waitForServerSpan();
                         assertThat(span.getName()).isEqualTo("GET /api/users/:id");
                     });
                     ctx.completeNow();
@@ -108,7 +104,7 @@ class SpanNameUpdaterTest {
         webClient.get(portDirect, "localhost", "/api/users/99").rxSend()
                 .subscribe(resp -> {
                     ctx.verify(() -> {
-                        SpanData span = waitForServerSpan();
+                        SpanData span = otel.waitForServerSpan();
                         assertThat(span.getAttributes().get(AttributeKey.stringKey("http.route")))
                                 .isEqualTo("/api/users/:id");
                     });
@@ -124,7 +120,7 @@ class SpanNameUpdaterTest {
         webClient.get(portAll, "localhost", "/api/items/electronics").rxSend()
                 .subscribe(resp -> {
                     ctx.verify(() -> {
-                        SpanData span = waitForServerSpan();
+                        SpanData span = otel.waitForServerSpan();
                         assertThat(span.getName()).isEqualTo("GET /api/items/:category");
                     });
                     ctx.completeNow();
@@ -137,7 +133,7 @@ class SpanNameUpdaterTest {
         webClient.get(portAll, "localhost", "/api/items/books").rxSend()
                 .subscribe(resp -> {
                     ctx.verify(() -> {
-                        SpanData span = waitForServerSpan();
+                        SpanData span = otel.waitForServerSpan();
                         assertThat(span.getAttributes().get(AttributeKey.stringKey("http.route")))
                                 .isEqualTo("/api/items/:category");
                     });
@@ -151,7 +147,7 @@ class SpanNameUpdaterTest {
         webClient.get(portAll, "localhost", "/api/items/tools").rxSend()
                 .subscribe(resp -> {
                     ctx.verify(() -> {
-                        SpanData span = waitForServerSpan();
+                        SpanData span = otel.waitForServerSpan();
                         assertThat(span.getAttributes().get(
                                 AttributeKey.longKey("http.response.status_code")))
                                 .isEqualTo(200L);
@@ -167,7 +163,7 @@ class SpanNameUpdaterTest {
                 .subscribe(resp -> {
                     ctx.verify(() -> {
                         assertThat(resp.statusCode()).isEqualTo(500);
-                        SpanData span = waitForServerSpan();
+                        SpanData span = otel.waitForServerSpan();
                         assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
                     });
                     ctx.completeNow();
@@ -197,14 +193,4 @@ class SpanNameUpdaterTest {
         });
     }
 
-    private SpanData waitForServerSpan() {
-        for (int i = 0; i < 100; i++) {
-            List<SpanData> spans = spanExporter.getFinishedSpanItems().stream()
-                    .filter(s -> s.getKind() == SpanKind.SERVER)
-                    .toList();
-            if (!spans.isEmpty()) return spans.get(0);
-            try { Thread.sleep(50); } catch (InterruptedException e) { break; }
-        }
-        throw new AssertionError("No SERVER span found after 5 seconds");
-    }
 }

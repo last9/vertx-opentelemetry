@@ -1,6 +1,5 @@
 package io.last9.tracing.otel.v3;
 
-import io.last9.tracing.otel.v3.agent.NettyHttpClientHelper;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
@@ -214,39 +213,29 @@ class TracedHttpRequest<T> extends HttpRequest<T> {
             }
 
             // 4. Execute the send and record response/error on the span.
-            //    Set IN_HTTP_CLIENT_CALL before invoking the delegate so the Netty-level
-            //    ByteBuddy advice on HttpClientRequest.end() skips creating a duplicate
-            //    CLIENT span. The advice resets the flag in its own finally block.
-            //    The try-finally here ensures the flag is reset even when the agent is
-            //    absent (library-only usage with no ByteBuddy advice active).
-            NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(true);
-            try {
-                return sendFn.get()
-                        .doOnSuccess(response -> {
-                            int statusCode = response.statusCode();
-                            span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE,
-                                    (long) statusCode);
-                            if (statusCode >= 400) {
-                                span.setStatus(StatusCode.ERROR);
-                            }
+            //    The Netty-level ByteBuddy advice detects the traceparent header we
+            //    injected in step 3 and skips duplicate CLIENT span creation.
+            return sendFn.get()
+                    .doOnSuccess(response -> {
+                        int statusCode = response.statusCode();
+                        span.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE,
+                                (long) statusCode);
+                        if (statusCode >= 400) {
+                            span.setStatus(StatusCode.ERROR);
+                        }
+                        span.end();
+                    })
+                    .doOnError(err -> {
+                        span.recordException(err,
+                                Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        span.setStatus(StatusCode.ERROR, err.getMessage());
+                        span.end();
+                    })
+                    .doOnDispose(() -> {
+                        if (span.isRecording()) {
                             span.end();
-                        })
-                        .doOnError(err -> {
-                            span.recordException(err,
-                                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
-                            span.setStatus(StatusCode.ERROR, err.getMessage());
-                            span.end();
-                        })
-                        .doOnDispose(() -> {
-                            if (span.isRecording()) {
-                                span.end();
-                            }
-                        });
-            } finally {
-                // Reset flag in case Netty ByteBuddy advice is not active
-                // (library-only usage without the agent jar).
-                NettyHttpClientHelper.IN_HTTP_CLIENT_CALL.set(false);
-            }
+                        }
+                    });
         });
     }
 
