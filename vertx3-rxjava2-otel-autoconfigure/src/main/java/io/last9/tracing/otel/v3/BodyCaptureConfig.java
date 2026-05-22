@@ -21,8 +21,8 @@ public final class BodyCaptureConfig {
     private static final List<String> DEFAULT_CONTENT_TYPES = Arrays.asList(
             "application/json", "application/xml", "text/");
 
-    // Package-private for testing: replace with a custom env lookup
-    static volatile UnaryOperator<String> envProvider = System::getenv;
+    // Public for test injection across packages
+    public static volatile UnaryOperator<String> envProvider = System::getenv;
 
     private BodyCaptureConfig() {}
 

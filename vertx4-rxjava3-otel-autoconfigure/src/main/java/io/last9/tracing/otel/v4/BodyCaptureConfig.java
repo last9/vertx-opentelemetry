@@ -21,7 +21,7 @@ public final class BodyCaptureConfig {
     private static final List<String> DEFAULT_CONTENT_TYPES = Arrays.asList(
             "application/json", "application/xml", "text/");
 
-    static volatile UnaryOperator<String> envProvider = System::getenv;
+    public static volatile UnaryOperator<String> envProvider = System::getenv;
 
     private BodyCaptureConfig() {}
 

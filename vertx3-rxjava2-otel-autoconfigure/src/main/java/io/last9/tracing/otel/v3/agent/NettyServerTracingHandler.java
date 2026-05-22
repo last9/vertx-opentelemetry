@@ -1,10 +1,13 @@
 package io.last9.tracing.otel.v3.agent;
 
+import io.last9.tracing.otel.v3.BodyCaptureConfig;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpRequestDecoder;
 import io.netty.handler.codec.http.HttpResponse;
@@ -25,16 +28,26 @@ import io.opentelemetry.context.propagation.TextMapPropagator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
+
 /**
  * Netty pipeline tracing for HTTP servers — architecture matches the OTel Java agent.
  *
  * <h2>Handler architecture</h2>
  * <ul>
  *   <li>{@link RequestHandler} (inbound) — after {@code HttpRequestDecoder}/{@code HttpServerCodec}.
- *       Creates SERVER span, makes it current via OTel scope for downstream handlers.</li>
+ *       Creates SERVER span, makes it current via OTel scope for downstream handlers.
+ *       Accumulates request body bytes when body capture is enabled.</li>
  *   <li>{@link ResponseHandler} (outbound) — after {@code HttpResponseEncoder}/{@code HttpServerCodec}.
- *       Sets response attributes, ends span on {@code LastHttpContent} write.</li>
+ *       Sets response attributes, ends span on {@code LastHttpContent} write.
+ *       Accumulates response body bytes when body capture is enabled.</li>
  * </ul>
+ *
+ * <h2>Body capture</h2>
+ * <p>Controlled by {@link BodyCaptureConfig}. Bytes are read non-destructively from
+ * {@code ByteBuf} via {@code getBytes()} (not {@code readBytes()}), so downstream handlers
+ * see the full content unchanged. Accumulated in per-channel {@link ByteArrayOutputStream}
+ * attributes, set as span attributes in {@code endServerSpan()}.
  *
  * <h2>Deduplication</h2>
  * <p>Before creating a span, checks if a SERVER span already exists in the current
@@ -66,11 +79,27 @@ public final class NettyServerTracingHandler {
     private static final AttributeKey<HttpResponse> SERVER_RESPONSE_KEY =
             AttributeKey.valueOf("last9.http.server.response");
 
+    /** Whether to accumulate request body bytes (path + content-type filter result). */
+    private static final AttributeKey<Boolean> BODY_REQUEST_ACTIVE_KEY =
+            AttributeKey.valueOf("last9.body.request.active");
+
+    /** Accumulated request body bytes. Non-null only when active. */
+    private static final AttributeKey<ByteArrayOutputStream> BODY_REQUEST_BYTES_KEY =
+            AttributeKey.valueOf("last9.body.request.bytes");
+
+    /** Accumulated response body bytes. Non-null only when content-type filter matched. */
+    private static final AttributeKey<ByteArrayOutputStream> BODY_RESPONSE_BYTES_KEY =
+            AttributeKey.valueOf("last9.body.response.bytes");
+
     // Pre-allocated attribute keys — avoid per-request allocation
     private static final io.opentelemetry.api.common.AttributeKey<Long> ATTR_SERVER_PORT =
             io.opentelemetry.api.common.AttributeKey.longKey("server.port");
     private static final io.opentelemetry.api.common.AttributeKey<Long> ATTR_STATUS_CODE =
             io.opentelemetry.api.common.AttributeKey.longKey("http.response.status_code");
+    private static final io.opentelemetry.api.common.AttributeKey<String> ATTR_REQ_BODY =
+            io.opentelemetry.api.common.AttributeKey.stringKey("http.request.body");
+    private static final io.opentelemetry.api.common.AttributeKey<String> ATTR_RESP_BODY =
+            io.opentelemetry.api.common.AttributeKey.stringKey("http.response.body");
 
     // Cached tracer and propagator — initialized lazily on first request
     private static volatile Tracer cachedTracer;
@@ -143,6 +172,12 @@ public final class NettyServerTracingHandler {
         } catch (Throwable ignored) {}
     }
 
+    /** Package-private: reset cached state between tests. */
+    static void resetForTest() {
+        cachedTracer = null;
+        cachedPropagator = null;
+    }
+
     private static void injectRequestHandler(ChannelPipeline p, String afterName) {
         if (p.get(REQUEST_HANDLER_NAME) != null) return;
         p.addAfter(afterName, REQUEST_HANDLER_NAME, new RequestHandler());
@@ -160,15 +195,33 @@ public final class NettyServerTracingHandler {
     /**
      * Creates SERVER span on HTTP request arrival. Makes the OTel context current
      * during {@code channelRead} so downstream handlers see the span.
+     * Also accumulates request body bytes when body capture is enabled.
      */
     static final class RequestHandler extends ChannelInboundHandlerAdapter {
 
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
             if (msg instanceof HttpRequest) {
-                Context otelContext = startServerSpan(ctx, (HttpRequest) msg);
+                HttpRequest request = (HttpRequest) msg;
+                Context otelContext = startServerSpan(ctx, request);
+
+                // Decide whether to accumulate request body
+                if (BodyCaptureConfig.enabled() && BodyCaptureConfig.captureRequest()) {
+                    String ct = request.headers().get("Content-Type");
+                    String uri = request.uri();
+                    int q = uri.indexOf('?');
+                    String path = q >= 0 ? uri.substring(0, q) : uri;
+                    boolean active = BodyCaptureConfig.isAllowedContentType(ct)
+                            && BodyCaptureConfig.isAllowedPath(path);
+                    ctx.channel().attr(BODY_REQUEST_ACTIVE_KEY).set(active);
+                }
+
+                // For FullHttpRequest (also implements HttpContent), body bytes arrive here
+                if (msg instanceof HttpContent) {
+                    accumulateRequestBody(ctx, (HttpContent) msg);
+                }
+
                 if (otelContext != null) {
-                    // Make span current for downstream handlers (Router, user code)
                     try (Scope ignored = otelContext.makeCurrent()) {
                         super.channelRead(ctx, msg);
                     } catch (Throwable t) {
@@ -178,6 +231,12 @@ public final class NettyServerTracingHandler {
                     return;
                 }
             }
+
+            // Chunked request: body arrives as separate HttpContent frames after HttpRequest
+            if (msg instanceof HttpContent) {
+                accumulateRequestBody(ctx, (HttpContent) msg);
+            }
+
             super.channelRead(ctx, msg);
         }
 
@@ -207,15 +266,15 @@ public final class NettyServerTracingHandler {
     /**
      * Ends SERVER span when HTTP response is written. Positioned after the encoder
      * so it sees {@code HttpResponse}/{@code LastHttpContent}, not raw {@code ByteBuf}.
+     * Also accumulates response body bytes when body capture is enabled.
      */
     static final class ResponseHandler extends ChannelOutboundHandlerAdapter {
 
         @Override
         public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise)
                 throws Exception {
-            // Early exit for non-HTTP frames (chunked body ByteBuf, etc.)
-            // Avoids channel attribute lookup on every intermediate write.
-            if (!(msg instanceof HttpResponse) && !(msg instanceof LastHttpContent)) {
+            // Pass through raw ByteBuf frames — we only handle HTTP-level objects
+            if (!(msg instanceof HttpResponse) && !(msg instanceof HttpContent)) {
                 super.write(ctx, msg, promise);
                 return;
             }
@@ -231,20 +290,40 @@ public final class NettyServerTracingHandler {
                     return;
                 }
                 setResponseStatus(otelContext, response);
-                // Store response for chunked case (headers come before body)
                 ctx.channel().attr(SERVER_RESPONSE_KEY).set(response);
+
+                // Allocate response body accumulator if content-type is allowed
+                if (BodyCaptureConfig.enabled() && BodyCaptureConfig.captureResponse()) {
+                    String ct = response.headers().get("Content-Type");
+                    if (BodyCaptureConfig.isAllowedContentType(ct)) {
+                        ctx.channel().attr(BODY_RESPONSE_BYTES_KEY).set(new ByteArrayOutputStream());
+                    }
+                }
+            }
+
+            // Accumulate response body bytes (covers both chunked and full responses)
+            if (msg instanceof HttpContent) {
+                ByteArrayOutputStream baos = ctx.channel().attr(BODY_RESPONSE_BYTES_KEY).get();
+                if (baos != null) {
+                    ByteBuf content = ((HttpContent) msg).content();
+                    int readable = content.readableBytes();
+                    int capacity = BodyCaptureConfig.maxBytes() - baos.size();
+                    if (capacity > 0) {
+                        int toRead = Math.min(readable, capacity);
+                        byte[] tmp = new byte[toRead];
+                        content.getBytes(content.readerIndex(), tmp); // non-destructive
+                        baos.write(tmp, 0, toRead);
+                    }
+                }
             }
 
             if (msg instanceof LastHttpContent) {
-                // End span. Use new promise if void to avoid silent listener failure.
                 if (otelContext != null) {
                     Span span = Span.fromContext(otelContext);
                     if (span.isRecording()) {
                         if (promise.isVoid()) {
-                            // VoidChannelPromise ignores listeners — end immediately
                             endServerSpan(ctx, null);
                         } else {
-                            // End span after write completes (captures write failures)
                             promise.addListener(future -> {
                                 if (!future.isSuccess()) {
                                     span.setStatus(StatusCode.ERROR, "Write failed");
@@ -348,9 +427,32 @@ public final class NettyServerTracingHandler {
         span.setAttribute("server.address", serverAddr);
     }
 
+    private static void accumulateRequestBody(ChannelHandlerContext ctx, HttpContent content) {
+        Boolean active = ctx.channel().attr(BODY_REQUEST_ACTIVE_KEY).get();
+        if (!Boolean.TRUE.equals(active)) return;
+        ByteArrayOutputStream baos = ctx.channel().attr(BODY_REQUEST_BYTES_KEY).get();
+        if (baos == null) {
+            baos = new ByteArrayOutputStream();
+            ctx.channel().attr(BODY_REQUEST_BYTES_KEY).set(baos);
+        }
+        ByteBuf buf = content.content();
+        int readable = buf.readableBytes();
+        int capacity = BodyCaptureConfig.maxBytes() - baos.size();
+        if (capacity > 0) {
+            int toRead = Math.min(readable, capacity);
+            byte[] tmp = new byte[toRead];
+            buf.getBytes(buf.readerIndex(), tmp); // non-destructive read
+            baos.write(tmp, 0, toRead);
+        }
+    }
+
     private static void endServerSpan(ChannelHandlerContext ctx, Throwable error) {
         Context otelContext = ctx.channel().attr(SERVER_CONTEXT_KEY).getAndSet(null);
-        ctx.channel().attr(SERVER_RESPONSE_KEY).set(null);
+        HttpResponse httpResponse = ctx.channel().attr(SERVER_RESPONSE_KEY).getAndSet(null);
+        ByteArrayOutputStream reqBytes = ctx.channel().attr(BODY_REQUEST_BYTES_KEY).getAndSet(null);
+        ByteArrayOutputStream resBytes = ctx.channel().attr(BODY_RESPONSE_BYTES_KEY).getAndSet(null);
+        ctx.channel().attr(BODY_REQUEST_ACTIVE_KEY).set(null);
+
         if (otelContext == null) return;
         try {
             Span span = Span.fromContext(otelContext);
@@ -358,9 +460,33 @@ public final class NettyServerTracingHandler {
                 span.recordException(error);
                 span.setStatus(StatusCode.ERROR, error.getMessage());
             }
+
+            // Attach body attributes if enabled and conditions met
+            if (BodyCaptureConfig.enabled() && span.isRecording()) {
+                int statusCode = httpResponse != null ? httpResponse.status().code() : 0;
+                boolean shouldAttach = !BodyCaptureConfig.errorOnly() || statusCode >= 400;
+                if (shouldAttach) {
+                    attachBodyAttr(span, ATTR_REQ_BODY, reqBytes);
+                    attachBodyAttr(span, ATTR_RESP_BODY, resBytes);
+                }
+            }
+
             span.end();
         } catch (Throwable t) {
             log.warn("NettyServerTracingHandler: failed to end span: {}", t.getMessage());
         }
+    }
+
+    private static void attachBodyAttr(Span span,
+            io.opentelemetry.api.common.AttributeKey<String> key,
+            ByteArrayOutputStream baos) {
+        if (baos == null || baos.size() == 0) return;
+        try {
+            String body = baos.toString("UTF-8");
+            if (baos.size() >= BodyCaptureConfig.maxBytes()) {
+                body += "[TRUNCATED]";
+            }
+            span.setAttribute(key, body);
+        } catch (java.io.UnsupportedEncodingException ignored) {}
     }
 }
