@@ -53,6 +53,13 @@ public class SpanNameUpdater {
 
             span.updateName(method + " " + route);
             span.setAttribute(SemanticAttributes.HTTP_ROUTE, route);
+
+            // Library-path body capture (request only; response requires agent)
+            io.vertx.rxjava3.core.buffer.Buffer body = ctx.getBody();
+            if (body != null) {
+                setBodyAttribute(span, body.toString("UTF-8"),
+                        ctx.request().path(), ctx.request().getHeader("content-type"));
+            }
         }
         ctx.next();
     }
@@ -105,6 +112,13 @@ public class SpanNameUpdater {
                                     Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
                         }
                         captured.setStatus(StatusCode.ERROR);
+                    }
+
+                    // Library-path body capture (request only; response requires agent)
+                    io.vertx.rxjava3.core.buffer.Buffer reqBody = ctx.getBody();
+                    if (reqBody != null) {
+                        setBodyAttribute(captured, reqBody.toString("UTF-8"),
+                                ctx.request().path(), ctx.request().getHeader("content-type"));
                     }
                 }
             });
@@ -191,6 +205,13 @@ public class SpanNameUpdater {
                         }
                         captured.setStatus(StatusCode.ERROR);
                     }
+
+                    // Library-path body capture (request only; response requires agent)
+                    io.vertx.core.buffer.Buffer reqBody = ctx.getBody();
+                    if (reqBody != null) {
+                        setBodyAttribute(captured, reqBody.toString("UTF-8"),
+                                ctx.request().path(), ctx.request().getHeader("content-type"));
+                    }
                 }
             });
 
@@ -207,5 +228,15 @@ public class SpanNameUpdater {
             }
             ctx.next();
         });
+    }
+
+    private static void setBodyAttribute(Span span, String bodyStr, String path, String ct) {
+        if (!BodyCaptureConfig.enabled() || !BodyCaptureConfig.captureRequest()) return;
+        if (bodyStr == null) return;
+        if (!BodyCaptureConfig.isAllowedContentType(ct) || !BodyCaptureConfig.isAllowedPath(path)) return;
+        if (bodyStr.length() > BodyCaptureConfig.maxBytes()) {
+            bodyStr = bodyStr.substring(0, BodyCaptureConfig.maxBytes()) + "[TRUNCATED]";
+        }
+        span.setAttribute("http.request.body", bodyStr);
     }
 }
