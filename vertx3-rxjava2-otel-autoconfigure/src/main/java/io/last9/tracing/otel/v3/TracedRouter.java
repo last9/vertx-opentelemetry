@@ -243,7 +243,19 @@ public final class TracedRouter {
                     }
                     span.setStatus(StatusCode.ERROR);
                 }
+
+                // --- HTTP body capture: request body only (if BodyHandler used) ---
+                if (BodyCaptureConfig.enabled()) {
+                    String contentType = ctx.request().getHeader("content-type");
+                    if (ctx.getBody() != null && isTextOrJson(contentType)) {
+                        String reqBody = trunc(ctx.getBody().toString("UTF-8"));
+                        span.setAttribute("http.request.body", reqBody);
+                    }
+                    // Response body capture would require custom buffering, not supported by default
+                }
             });
+            // --- END BODY CAPTURE ---
+
 
             // Make the OTel context current and proceed to the next handler.
             try (Scope ignored = otelContext.makeCurrent()) {
@@ -280,4 +292,17 @@ public final class TracedRouter {
 
         return ctx.request().path();
     }
+
+    // Helper for simple content-type filtering for body capture
+    private static boolean isTextOrJson(String contentType) {
+        return contentType != null &&
+               (contentType.startsWith("text/") || contentType.contains("json"));
+    }
+
+    private static String trunc(String s) {
+        if (s == null) return null;
+        int limit = BodyCaptureConfig.maxBytes();
+        return s.length() > limit ? s.substring(0, limit) : s;
+    }
 }
+
