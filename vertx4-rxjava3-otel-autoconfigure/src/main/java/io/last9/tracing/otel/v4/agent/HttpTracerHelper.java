@@ -1,5 +1,7 @@
 package io.last9.tracing.otel.v4.agent;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,8 +15,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>The SPI span is an {@code io.opentelemetry.api.trace.Span} from the <em>app's</em>
  * OpenTelemetry SDK — a different classloader scope from our relocated
- * {@code io.last9.internal.otel} classes. All span mutations are therefore performed via
- * reflection so that no import dependency on the app's OTel types is required.
+ * {@code io.last9.internal.otel} classes. Mutations use the typed {@link Span} API when
+ * {@code instanceof Span} succeeds (tests and same-classloader runs); otherwise reflection
+ * ({@link #setErrorStatusReflective}) so agent and app classloader isolation is preserved.
  */
 public final class HttpTracerHelper {
 
@@ -39,7 +42,11 @@ public final class HttpTracerHelper {
         try {
             Object span = operation.getClass().getMethod("span").invoke(operation);
             if (span == null) return;
-            if (!isRecording(span)) return;
+            if (span instanceof Span) {
+                enrichOnSendTyped((Span) span, request);
+                return;
+            }
+            if (!isRecordingReflective(span)) return;
 
             String method = extractMethod(request);
             String path   = extractPath(request);
@@ -64,6 +71,28 @@ public final class HttpTracerHelper {
         }
     }
 
+    private static void enrichOnSendTyped(Span span, Object request) {
+        if (!span.isRecording()) {
+            return;
+        }
+        String method = extractMethod(request);
+        String path = extractPath(request);
+        String host = extractHost(request);
+        int port = extractPort(request);
+
+        span.updateName(method + (path != null ? " " + path : ""));
+        if (host != null) {
+            span.setAttribute("net.peer.name", host);
+        }
+        if (port > 0) {
+            span.setAttribute("net.peer.port", port);
+        }
+        String uri = extractUri(request);
+        if (uri != null) {
+            span.setAttribute("http.url", buildUrl(host, port, uri));
+        }
+    }
+
     /**
      * Called from {@link HttpClientReceiveAdvice} on entry of
      * {@code OpenTelemetryTracer.receiveResponse()}, before the SPI ends the span.
@@ -79,33 +108,54 @@ public final class HttpTracerHelper {
         if (operation == null) return;
         if (response != null && !isHttpClientResponse(response)) return;
         try {
-            Object span = operation.getClass().getMethod("span").invoke(operation);
-            if (span == null) return;
-            if (!isRecording(span)) return;
-
-            int statusCode = -1;
-            if (response != null) {
-                try {
-                    Object code = response.getClass().getMethod("statusCode").invoke(response);
-                    if (code instanceof Integer) statusCode = (Integer) code;
-                } catch (Exception ignored) {}
+            Object spanObj = operation.getClass().getMethod("span").invoke(operation);
+            if (spanObj == null) return;
+            if (spanObj instanceof Span) {
+                enrichOnReceiveTyped((Span) spanObj, response, failure);
+                return;
             }
+            if (!isRecordingReflective(spanObj)) return;
 
+            int statusCode = extractStatusCode(response);
             if (statusCode > 0) {
-                setAttribute(span, "http.status_code", (long) statusCode);
+                setAttribute(spanObj, "http.status_code", (long) statusCode);
             }
-
             if (failure != null || statusCode >= 400) {
-                setErrorStatus(span, failure, statusCode);
+                setErrorStatus(spanObj, failure, statusCode);
             }
         } catch (Exception e) {
             log.warn("HttpTracerHelper: failed to enrich CLIENT span on receive: {}", e.getMessage());
         }
     }
 
+    private static void enrichOnReceiveTyped(Span span, Object response, Throwable failure) {
+        if (!span.isRecording()) {
+            return;
+        }
+        int statusCode = extractStatusCode(response);
+        if (statusCode > 0) {
+            span.setAttribute("http.status_code", statusCode);
+        }
+        if (failure != null || statusCode >= 400) {
+            setErrorStatus(span, failure, statusCode);
+        }
+    }
+
+    private static int extractStatusCode(Object response) {
+        if (response == null) {
+            return -1;
+        }
+        try {
+            Object code = response.getClass().getMethod("statusCode").invoke(response);
+            return (code instanceof Integer) ? (Integer) code : -1;
+        } catch (Exception ignored) {
+            return -1;
+        }
+    }
+
     // --- reflection helpers ---
 
-    private static boolean isRecording(Object span) {
+    private static boolean isRecordingReflective(Object span) {
         try {
             return Boolean.TRUE.equals(span.getClass().getMethod("isRecording").invoke(span));
         } catch (Exception e) {
@@ -123,19 +173,37 @@ public final class HttpTracerHelper {
                 .invoke(span, key, value);
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
     private static void setErrorStatus(Object span, Throwable failure, int statusCode) {
+        String desc = failure != null ? failure.getMessage() : "HTTP " + statusCode;
+        if (desc == null) {
+            desc = "error";
+        }
         try {
-            ClassLoader cl = span.getClass().getClassLoader();
-            Class<?> statusCodeEnum = cl.loadClass("io.opentelemetry.api.trace.StatusCode");
-            Object errorCode = Enum.valueOf((Class<Enum>) statusCodeEnum, "ERROR");
-            String desc = failure != null ? failure.getMessage() : "HTTP " + statusCode;
-            if (desc == null) desc = "error";
-            span.getClass().getMethod("setStatus", statusCodeEnum, String.class)
-                    .invoke(span, errorCode, desc);
+            if (span instanceof Span) {
+                Span otelSpan = (Span) span;
+                if (failure != null) {
+                    otelSpan.recordException(failure);
+                }
+                otelSpan.setStatus(StatusCode.ERROR, desc);
+                return;
+            }
+            setErrorStatusReflective(span, failure, desc);
         } catch (Exception e) {
             log.warn("HttpTracerHelper: failed to set ERROR status: {}", e.getMessage());
         }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void setErrorStatusReflective(Object span, Throwable failure, String desc)
+            throws Exception {
+        if (failure != null) {
+            span.getClass().getMethod("recordException", Throwable.class).invoke(span, failure);
+        }
+        ClassLoader cl = span.getClass().getClassLoader();
+        Class<?> statusCodeEnum = cl.loadClass("io.opentelemetry.api.trace.StatusCode");
+        Object errorCode = Enum.valueOf((Class<Enum>) statusCodeEnum, "ERROR");
+        span.getClass().getMethod("setStatus", statusCodeEnum, String.class)
+                .invoke(span, errorCode, desc);
     }
 
     // --- request/response type guards ---

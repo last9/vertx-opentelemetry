@@ -1,7 +1,9 @@
 package io.last9.tracing.otel.v3;
 
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.semconv.ExceptionAttributes;
 import io.opentelemetry.semconv.SemanticAttributes;
 import io.vertx.reactivex.ext.web.Route;
 import io.vertx.reactivex.ext.web.Router;
@@ -95,6 +97,11 @@ public class SpanNameUpdater {
                     int statusCode = ctx.response().getStatusCode();
                     captured.setAttribute(SemanticAttributes.HTTP_RESPONSE_STATUS_CODE, (long) statusCode);
                     if (statusCode >= 500) {
+                        Throwable failure = ctx.failure();
+                        if (failure != null) {
+                            captured.recordException(failure,
+                                    Attributes.of(ExceptionAttributes.EXCEPTION_ESCAPED, true));
+                        }
                         captured.setStatus(StatusCode.ERROR);
                     }
                 }
