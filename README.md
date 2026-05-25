@@ -24,11 +24,11 @@ Download the latest agent from [Releases](https://github.com/last9/vertx-opentel
 ```bash
 # Vert.x 3
 curl -L -o vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.4/vertx3-otel-agent-2.3.4.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.5/vertx3-otel-agent-2.3.5.jar
 
 # Vert.x 4
 curl -L -o vertx4-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.4/vertx4-otel-agent-2.3.4.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.5/vertx4-otel-agent-2.3.5.jar
 ```
 
 ## What gets instrumented
@@ -94,7 +94,7 @@ This library works with Vert.x's event-loop model — handler-based instrumentat
 
 ```bash
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.4/vertx3-otel-agent-2.3.4.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.5/vertx3-otel-agent-2.3.5.jar
 
 java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar /opt/app/my-app.jar
 ```
@@ -181,7 +181,7 @@ Set `OTEL_EXPORTER_OTLP_TIMEOUT=30000` when exporting to remote backends.
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>2.3.4</version>
+    <version>2.3.5</version>
 </dependency>
 ```
 
@@ -200,7 +200,7 @@ consumer.batchHandler(KafkaTracing.tracedBatchHandler(topicName, this::handleBat
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>2.3.4</version>
+    <version>2.3.5</version>
 </dependency>
 ```
 
