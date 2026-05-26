@@ -263,6 +263,24 @@ class ResteasyDispatchHelperTest {
     }
 
     @Test
+    void requestBodyCapturedWhenInputStreamNotMarkSupported() {
+        // Simulates Undertow's ServletInputStream (markSupported=false)
+        enableBodyCapture(true, false);
+        byte[] body = "{\"wsId\":123}".getBytes(StandardCharsets.UTF_8);
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/json");
+        StubHttpRequest req = new StubHttpRequest("POST", new StubUriInfo("/api/v1/rounds"),
+                headers, body, false); // markSupported=false
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(200), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.request.body")))
+                .isEqualTo("{\"wsId\":123}");
+    }
+
+    @Test
     void requestBodyCapturedFor5xxWhenErrorOnlyEnabled() {
         enableBodyCapture(true, true);
         byte[] body = "{\"wsId\":123}".getBytes(StandardCharsets.UTF_8);
@@ -398,6 +416,8 @@ class ResteasyDispatchHelperTest {
         private final StubUriInfo uri;
         private final StubHttpHeaders httpHeaders;
         private final byte[] body;
+        private final boolean markSupported;
+        private InputStream currentStream;
 
         StubHttpRequest(String method, String path, Map<String, String> headers) {
             this(method, new StubUriInfo(path), headers, null);
@@ -405,18 +425,38 @@ class ResteasyDispatchHelperTest {
 
         StubHttpRequest(String method, StubUriInfo uriInfo, Map<String, String> headers,
                         byte[] body) {
+            this(method, uriInfo, headers, body, true);
+        }
+
+        StubHttpRequest(String method, StubUriInfo uriInfo, Map<String, String> headers,
+                        byte[] body, boolean markSupported) {
             this.httpMethod = method;
             this.uri = uriInfo;
             this.httpHeaders = new StubHttpHeaders(headers);
             this.body = body;
+            this.markSupported = markSupported;
+            resetStream();
+        }
+
+        private void resetStream() {
+            byte[] bytes = body != null ? body : new byte[0];
+            if (markSupported) {
+                currentStream = new ByteArrayInputStream(bytes);
+            } else {
+                // Non-markable stream simulating Undertow's ServletInputStream
+                currentStream = new java.io.FilterInputStream(new ByteArrayInputStream(bytes)) {
+                    @Override public boolean markSupported() { return false; }
+                    @Override public void mark(int readlimit) {}
+                    @Override public void reset() {}
+                };
+            }
         }
 
         public String getHttpMethod() { return httpMethod; }
         public StubUriInfo getUri() { return uri; }
         public StubHttpHeaders getHttpHeaders() { return httpHeaders; }
-        public InputStream getInputStream() {
-            return new ByteArrayInputStream(body != null ? body : new byte[0]);
-        }
+        public InputStream getInputStream() { return currentStream; }
+        public void setInputStream(InputStream is) { this.currentStream = is; }
     }
 
     /** Stub for {@code javax.ws.rs.core.UriInfo}. */

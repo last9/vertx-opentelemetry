@@ -14,7 +14,9 @@ import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.io.SequenceInputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.net.URI;
@@ -157,21 +159,42 @@ public final class ResteasyDispatchHelper {
                 }
             } catch (Exception ignored) {}
 
-            // Request body capture (RESTEasy reads body before dispatch; mark/reset preserves it)
+            // Request body capture — two paths depending on whether the stream supports mark/reset.
+            // Undertow's ServletInputStream does NOT support mark/reset; Vert.x's buffered body does.
             if (BodyCaptureConfig.enabled() && BodyCaptureConfig.captureRequest()) {
                 try {
                     InputStream is = (InputStream) requestObj.getClass()
                             .getMethod("getInputStream").invoke(requestObj);
-                    if (is != null && is.markSupported()) {
+                    if (is != null) {
                         int max = BodyCaptureConfig.maxBytes();
-                        is.mark(max + 1);
                         byte[] buf = new byte[max];
-                        int read = is.read(buf, 0, buf.length);
-                        if (read > 0) {
-                            REQUEST_BODY_HOLDER.set(
-                                    read == buf.length ? buf : java.util.Arrays.copyOf(buf, read));
+                        if (is.markSupported()) {
+                            // Non-destructive: mark → read → reset
+                            is.mark(max + 1);
+                            int read = is.read(buf, 0, max);
+                            if (read > 0) {
+                                REQUEST_BODY_HOLDER.set(
+                                        read == max ? buf : java.util.Arrays.copyOf(buf, read));
+                            }
+                            is.reset();
+                        } else {
+                            // Destructive read: capture bytes, restore stream via setInputStream()
+                            int total = 0, n;
+                            while (total < max && (n = is.read(buf, total, max - total)) != -1) {
+                                total += n;
+                            }
+                            if (total > 0) {
+                                byte[] captured = total == max ? buf : java.util.Arrays.copyOf(buf, total);
+                                REQUEST_BODY_HOLDER.set(captured);
+                                // Restore: captured bytes + any remaining (truncated) stream
+                                InputStream restored = total < max
+                                        ? new ByteArrayInputStream(captured)
+                                        : new SequenceInputStream(new ByteArrayInputStream(captured), is);
+                                requestObj.getClass()
+                                        .getMethod("setInputStream", InputStream.class)
+                                        .invoke(requestObj, restored);
+                            }
                         }
-                        is.reset();
                     }
                 } catch (Exception ignored) {}
             }
