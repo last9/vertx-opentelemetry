@@ -46,8 +46,11 @@ public final class ResteasyDispatchHelper {
 
     private static final ThreadLocal<Scope> SCOPE_HOLDER = new ThreadLocal<>();
     private static final ThreadLocal<byte[]> REQUEST_BODY_HOLDER = new ThreadLocal<>();
-    private static final ThreadLocal<ByteArrayOutputStream> RESPONSE_BODY_HOLDER = new ThreadLocal<>();
     private static final AtomicBoolean URI_INFO_LOG_ONCE = new AtomicBoolean(false);
+
+    // Request attribute keys — stored on HttpRequest so they survive async thread hops.
+    private static final String ATTR_SPAN = "io.last9.otel.span";
+    private static final String ATTR_RESP_CAPTURE = "io.last9.otel.resp.capture";
 
     /**
      * Extracts W3C trace context headers from a RESTEasy HttpRequest via reflection.
@@ -204,6 +207,10 @@ public final class ResteasyDispatchHelper {
                 } catch (Exception ignored) {}
             }
 
+            // Store on request attributes so async delivery advice can retrieve it
+            // across thread boundaries (ThreadLocal won't survive the pool-thread hop).
+            setReqAttr(requestObj, ATTR_SPAN, span);
+
             Context otelContext = parentContext.with(span);
             Scope scope = otelContext.makeCurrent();
             SCOPE_HOLDER.set(scope);
@@ -225,6 +232,12 @@ public final class ResteasyDispatchHelper {
      */
     public static void endSpan(Span span, Object requestObj, Object responseObj, Throwable thrown) {
         if (span == null) return;
+        if (!span.isRecording()) {
+            // Already ended (e.g. by writeException advice for sync errors); just clean up scope.
+            Scope scope = SCOPE_HOLDER.get();
+            if (scope != null) { scope.close(); SCOPE_HOLDER.remove(); }
+            return;
+        }
 
         int status = -1;
         try {
@@ -280,10 +293,10 @@ public final class ResteasyDispatchHelper {
             }
 
             // Attach captured response body.
-            // Note: async handlers (CompletionStage) write the response AFTER invoke() returns,
-            // so the capture buffer is empty for those handlers and this block is skipped silently.
-            ByteArrayOutputStream respCapture = RESPONSE_BODY_HOLDER.get();
-            RESPONSE_BODY_HOLDER.remove();
+            // For async handlers, the capture was stored on the request attribute (thread-safe);
+            // for sync handlers it's also on the request attribute since captureResponseSetup
+            // now stores there instead of a ThreadLocal.
+            ByteArrayOutputStream respCapture = (ByteArrayOutputStream) getReqAttr(requestObj, ATTR_RESP_CAPTURE);
             if (respCapture != null && respCapture.size() > 0
                     && BodyCaptureConfig.enabled() && BodyCaptureConfig.captureResponse()) {
                 boolean shouldAttach = !BodyCaptureConfig.errorOnly() || (status >= 400) || (thrown != null);
@@ -497,18 +510,64 @@ public final class ResteasyDispatchHelper {
     }
 
     /**
+     * Returns true if the current request is async (CompletionStage/RxJava handler) by
+     * checking {@code HttpRequest.getAsyncContext().isSuspended()} via reflection.
+     * Returns false on any reflection failure (safe default — treats as sync).
+     */
+    public static boolean isAsyncRequest(Object requestObj) {
+        if (requestObj == null) return false;
+        try {
+            Object asyncCtx = requestObj.getClass().getMethod("getAsyncContext").invoke(requestObj);
+            if (asyncCtx == null) return false;
+            return (boolean) asyncCtx.getClass().getMethod("isSuspended").invoke(asyncCtx);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Closes the OTel scope without ending the span. Called from {@link ResteasyDispatchAdvice}
+     * when the request is async — the span stays alive and is ended by
+     * {@link ResteasyAsyncDeliveryAdvice} when {@code asynchronousDelivery()} completes.
+     */
+    public static void closeScope() {
+        Scope scope = SCOPE_HOLDER.get();
+        if (scope != null) {
+            scope.close();
+            SCOPE_HOLDER.remove();
+        }
+    }
+
+    /**
+     * Ends the span for a successfully-delivered async response. Retrieves the span from
+     * the request attributes (set by {@link #startSpan}) so it works across async thread hops.
+     */
+    public static void endSpanFromAsync(Object requestObj, Object responseObj, Throwable thrown) {
+        Span span = (Span) getReqAttr(requestObj, ATTR_SPAN);
+        endSpan(span, requestObj, responseObj, thrown);
+    }
+
+    /**
+     * Records an exception and ends the span via {@code writeException()}.
+     * Works for both sync (exception thrown inside invoke()) and async
+     * (CompletionStage that completed exceptionally) paths.
+     */
+    public static void endSpanFromWriteException(Object requestObj, Object responseObj,
+                                                  Throwable throwable) {
+        Span span = (Span) getReqAttr(requestObj, ATTR_SPAN);
+        endSpan(span, requestObj, responseObj, throwable);
+    }
+
+    /**
      * Wraps the RESTEasy HttpResponse output stream with a {@link TeeOutputStream} so that
-     * response body bytes are captured into a thread-local buffer for span attachment.
-     * No-op if response capture is disabled or wrapping fails.
+     * response body bytes are captured for span attachment. The capture buffer is stored on
+     * the request attributes (not a ThreadLocal) so it is accessible from async delivery
+     * threads via {@link #endSpanFromAsync}.
      *
-     * <p><strong>Async limitation:</strong> For handlers returning {@code CompletionStage} or
-     * RxJava types, {@code invoke()} returns before the response is written, so the capture
-     * buffer will be empty when {@link #endSpan} runs. Body capture is effectively synchronous
-     * handlers only.
-     *
+     * @param requestObj  the RESTEasy HttpRequest (accessed via reflection)
      * @param responseObj the RESTEasy HttpResponse (accessed via reflection)
      */
-    public static void captureResponseSetup(Object responseObj) {
+    public static void captureResponseSetup(Object requestObj, Object responseObj) {
         if (!BodyCaptureConfig.enabled() || !BodyCaptureConfig.captureResponse()) return;
         if (responseObj == null) return;
         try {
@@ -520,8 +579,28 @@ public final class ResteasyDispatchHelper {
             responseObj.getClass()
                     .getMethod("setOutputStream", OutputStream.class)
                     .invoke(responseObj, tee);
-            RESPONSE_BODY_HOLDER.set(capture);
+            setReqAttr(requestObj, ATTR_RESP_CAPTURE, capture);
         } catch (Exception ignored) {}
+    }
+
+    private static void setReqAttr(Object requestObj, String key, Object value) {
+        if (requestObj == null) return;
+        try {
+            requestObj.getClass()
+                    .getMethod("setAttribute", String.class, Object.class)
+                    .invoke(requestObj, key, value);
+        } catch (Exception ignored) {}
+    }
+
+    private static Object getReqAttr(Object requestObj, String key) {
+        if (requestObj == null) return null;
+        try {
+            return requestObj.getClass()
+                    .getMethod("getAttribute", String.class)
+                    .invoke(requestObj, key);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static String getResponseContentType(Object responseObj) {

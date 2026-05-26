@@ -3,18 +3,22 @@ package io.last9.tracing.otel.v3.agent;
 import net.bytebuddy.asm.Advice;
 
 /**
- * ByteBuddy advice for {@code org.jboss.resteasy.core.SynchronousDispatcher.writeException(
- * HttpRequest, HttpResponse, Throwable, Consumer)}.
+ * ByteBuddy advice for {@code SynchronousDispatcher.writeException(HttpRequest, HttpResponse,
+ * Throwable[, Consumer])}.
  *
- * <p>RESTEasy calls this instead of throwing when handling async {@code CompletionStage}
- * responses that complete exceptionally. {@link ResteasyDispatchAdvice}'s {@code @Advice.Thrown}
- * is always null in that case — this advice bridges the gap by recording the exception on
- * the current OTel span while the RESTEasy SERVER span is still active.
+ * <p>RESTEasy calls this for both sync internal errors and async CompletionStage exceptions.
+ * For sync errors, {@link ResteasyDispatchAdvice}'s {@code @Advice.Thrown} is null because
+ * RESTEasy catches internally; for async errors, the SERVER span is no longer current after
+ * {@link ResteasyDispatchHelper#closeScope()} ran. In both cases, this advice records the
+ * exception and ends the span via the span stored on the request attributes.
  */
 public class ResteasyWriteExceptionAdvice {
 
-    @Advice.OnMethodEnter(suppress = Throwable.class)
-    static void onEnter(@Advice.Argument(2) Throwable throwable) {
-        ResteasyDispatchHelper.recordAsyncException(throwable);
+    @Advice.OnMethodExit(suppress = Throwable.class)
+    static void onExit(
+            @Advice.Argument(0) Object request,
+            @Advice.Argument(1) Object response,
+            @Advice.Argument(2) Throwable throwable) {
+        ResteasyDispatchHelper.endSpanFromWriteException(request, response, throwable);
     }
 }

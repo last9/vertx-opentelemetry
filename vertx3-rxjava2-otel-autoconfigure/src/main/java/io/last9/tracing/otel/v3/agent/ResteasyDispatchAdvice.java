@@ -22,7 +22,7 @@ public class ResteasyDispatchAdvice {
             @Advice.Local("otelSpan") Span span) {
 
         span = ResteasyDispatchHelper.startSpan(request);
-        ResteasyDispatchHelper.captureResponseSetup(response);
+        ResteasyDispatchHelper.captureResponseSetup(request, response);
     }
 
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
@@ -32,6 +32,11 @@ public class ResteasyDispatchAdvice {
             @Advice.Thrown Throwable thrown,
             @Advice.Local("otelSpan") Span span) {
 
-        ResteasyDispatchHelper.endSpan(span, request, response, thrown);
+        if (ResteasyDispatchHelper.isAsyncRequest(request)) {
+            // Span stays alive; asynchronousDelivery advice ends it after response is written.
+            ResteasyDispatchHelper.closeScope();
+        } else {
+            ResteasyDispatchHelper.endSpan(span, request, response, thrown);
+        }
     }
 }

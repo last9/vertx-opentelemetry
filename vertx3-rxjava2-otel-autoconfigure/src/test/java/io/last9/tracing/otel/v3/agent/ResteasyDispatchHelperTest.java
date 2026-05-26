@@ -422,7 +422,7 @@ class ResteasyDispatchHelperTest {
         StubHttpResponse resp = new StubHttpResponse(200, "application/json");
 
         Span span = ResteasyDispatchHelper.startSpan(req);
-        ResteasyDispatchHelper.captureResponseSetup(resp);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp);
         resp.getOutputStream().write(respBytes);
         ResteasyDispatchHelper.endSpan(span, req, resp, null);
 
@@ -439,7 +439,7 @@ class ResteasyDispatchHelperTest {
         StubHttpResponse resp = new StubHttpResponse(200, "application/json");
 
         Span span = ResteasyDispatchHelper.startSpan(req);
-        ResteasyDispatchHelper.captureResponseSetup(resp);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp);
         resp.getOutputStream().write(respBytes);
         ResteasyDispatchHelper.endSpan(span, req, resp, null);
 
@@ -455,7 +455,7 @@ class ResteasyDispatchHelperTest {
         StubHttpResponse resp = new StubHttpResponse(200, "application/json");
 
         Span span = ResteasyDispatchHelper.startSpan(req);
-        ResteasyDispatchHelper.captureResponseSetup(resp);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp);
         resp.getOutputStream().write(respBytes);
         ResteasyDispatchHelper.endSpan(span, req, resp, null);
 
@@ -471,7 +471,7 @@ class ResteasyDispatchHelperTest {
         StubHttpResponse resp = new StubHttpResponse(404, "application/json");
 
         Span span = ResteasyDispatchHelper.startSpan(req);
-        ResteasyDispatchHelper.captureResponseSetup(resp);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp);
         resp.getOutputStream().write(respBytes);
         ResteasyDispatchHelper.endSpan(span, req, resp, null);
 
@@ -488,7 +488,7 @@ class ResteasyDispatchHelperTest {
         StubHttpResponse resp = new StubHttpResponse(500, "application/json");
 
         Span span = ResteasyDispatchHelper.startSpan(req);
-        ResteasyDispatchHelper.captureResponseSetup(resp);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp);
         resp.getOutputStream().write(respBytes);
         ResteasyDispatchHelper.endSpan(span, req, resp, null);
 
@@ -505,12 +505,60 @@ class ResteasyDispatchHelperTest {
         StubHttpResponse resp = new StubHttpResponse(200, "application/octet-stream");
 
         Span span = ResteasyDispatchHelper.startSpan(req);
-        ResteasyDispatchHelper.captureResponseSetup(resp);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp);
         resp.getOutputStream().write(respBytes);
         ResteasyDispatchHelper.endSpan(span, req, resp, null);
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body"))).isNull();
+    }
+
+    @Test
+    void responseBodyCapturedForAsyncHandler() throws Exception {
+        // async path: invoke() closes scope but does NOT end span; asynchronousDelivery ends it
+        enableBodyCapture(true, false);
+        byte[] respBytes = "{\"async\":true}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/data", Collections.emptyMap(),
+                null, true, true); // suspended=true → async
+        StubHttpResponse resp = new StubHttpResponse(200, "application/json");
+
+        // Simulate invoke() enter
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp);
+
+        // Simulate invoke() exit for async request (scope closed, span kept alive)
+        ResteasyDispatchHelper.closeScope();
+        assertThat(Span.current()).isNotSameAs(span); // scope is closed
+
+        // Simulate async delivery: response written, then endSpanFromAsync called
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpanFromAsync(req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body")))
+                .isEqualTo("{\"async\":true}");
+    }
+
+    @Test
+    void asyncExceptionEndedViaWriteException() {
+        // async error path: invoke() closes scope; writeException ends span with exception
+        StubHttpRequest req = new StubHttpRequest("POST", "/api/v1/fail", Collections.emptyMap(),
+                null, true, true); // suspended=true
+        StubHttpResponse resp = new StubHttpResponse(500, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.closeScope();
+        assertThat(Span.current()).isNotSameAs(span);
+
+        RuntimeException asyncErr = new RuntimeException("simulated async failure");
+        ResteasyDispatchHelper.endSpanFromWriteException(req, resp, asyncErr);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(sd.getEvents()).anyMatch(e ->
+                e.getName().equals("exception") &&
+                e.getAttributes().get(AttributeKey.stringKey("exception.message"))
+                        .equals("simulated async failure"));
     }
 
     @Test
@@ -525,7 +573,7 @@ class ResteasyDispatchHelperTest {
         StubHttpResponse resp = new StubHttpResponse(200, "application/json");
 
         Span span = ResteasyDispatchHelper.startSpan(req);
-        ResteasyDispatchHelper.captureResponseSetup(resp);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp);
         resp.getOutputStream().write(respBytes);
         ResteasyDispatchHelper.endSpan(span, req, resp, null);
 
@@ -568,24 +616,37 @@ class ResteasyDispatchHelperTest {
         private final StubHttpHeaders httpHeaders;
         private final byte[] body;
         private final boolean markSupported;
+        private final boolean suspended;
         private InputStream currentStream;
+        private final Map<String, Object> attributes = new HashMap<>();
 
         StubHttpRequest(String method, String path, Map<String, String> headers) {
-            this(method, new StubUriInfo(path), headers, null);
+            this(method, new StubUriInfo(path), headers, null, true, false);
         }
 
         StubHttpRequest(String method, StubUriInfo uriInfo, Map<String, String> headers,
                         byte[] body) {
-            this(method, uriInfo, headers, body, true);
+            this(method, uriInfo, headers, body, true, false);
         }
 
         StubHttpRequest(String method, StubUriInfo uriInfo, Map<String, String> headers,
                         byte[] body, boolean markSupported) {
+            this(method, uriInfo, headers, body, markSupported, false);
+        }
+
+        StubHttpRequest(String method, String path, Map<String, String> headers,
+                        byte[] body, boolean markSupported, boolean suspended) {
+            this(method, new StubUriInfo(path), headers, body, markSupported, suspended);
+        }
+
+        StubHttpRequest(String method, StubUriInfo uriInfo, Map<String, String> headers,
+                        byte[] body, boolean markSupported, boolean suspended) {
             this.httpMethod = method;
             this.uri = uriInfo;
             this.httpHeaders = new StubHttpHeaders(headers);
             this.body = body;
             this.markSupported = markSupported;
+            this.suspended = suspended;
             resetStream();
         }
 
@@ -594,7 +655,6 @@ class ResteasyDispatchHelperTest {
             if (markSupported) {
                 currentStream = new ByteArrayInputStream(bytes);
             } else {
-                // Non-markable stream simulating Undertow's ServletInputStream
                 currentStream = new java.io.FilterInputStream(new ByteArrayInputStream(bytes)) {
                     @Override public boolean markSupported() { return false; }
                     @Override public void mark(int readlimit) {}
@@ -608,6 +668,17 @@ class ResteasyDispatchHelperTest {
         public StubHttpHeaders getHttpHeaders() { return httpHeaders; }
         public InputStream getInputStream() { return currentStream; }
         public void setInputStream(InputStream is) { this.currentStream = is; }
+        public Object getAttribute(String name) { return attributes.get(name); }
+        public void setAttribute(String name, Object value) { attributes.put(name, value); }
+        public void removeAttribute(String name) { attributes.remove(name); }
+        public StubAsyncContext getAsyncContext() { return new StubAsyncContext(suspended); }
+    }
+
+    /** Stub for {@code org.jboss.resteasy.spi.ResteasyAsynchronousContext}. */
+    static class StubAsyncContext {
+        private final boolean suspended;
+        StubAsyncContext(boolean suspended) { this.suspended = suspended; }
+        public boolean isSuspended() { return suspended; }
     }
 
     /** Stub for {@code javax.ws.rs.core.UriInfo}. */
