@@ -29,7 +29,8 @@ public final class BodyCaptureConfig {
     public static boolean enabled() {
         String v = getenv(ENV_ENABLED);
         if (v == null) v = getenv(ENV_LEGACY);
-        return "true".equalsIgnoreCase(v) || "1".equals(v);
+        if ("true".equalsIgnoreCase(v) || "1".equals(v)) return true;
+        return getBool(ENV_ERROR_ONLY, false);
     }
 
     public static boolean captureRequest() {

@@ -233,6 +233,36 @@ class ResteasyDispatchHelperTest {
     }
 
     @Test
+    void requestBodyCapturedFor4xxWhenOnlyErrorOnlySet() {
+        // VERTX_OTEL_BODY_CAPTURE_ERROR_ONLY=true alone should enable capture for errors
+        BodyCaptureConfig.envProvider = key ->
+                BodyCaptureConfig.ENV_ERROR_ONLY.equals(key) ? "true" : null;
+        byte[] body = "{\"wsId\":123}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = requestWithBody("POST", "/api/v1/rounds", body, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(400), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.request.body")))
+                .isEqualTo("{\"wsId\":123}");
+    }
+
+    @Test
+    void requestBodyNotCapturedFor2xxWhenOnlyErrorOnlySet() {
+        BodyCaptureConfig.envProvider = key ->
+                BodyCaptureConfig.ENV_ERROR_ONLY.equals(key) ? "true" : null;
+        byte[] body = "{\"wsId\":123}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = requestWithBody("POST", "/api/v1/rounds", body, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(200), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.request.body"))).isNull();
+    }
+
+    @Test
     void requestBodyCapturedFor5xxWhenErrorOnlyEnabled() {
         enableBodyCapture(true, true);
         byte[] body = "{\"wsId\":123}".getBytes(StandardCharsets.UTF_8);
