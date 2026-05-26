@@ -240,7 +240,7 @@ public final class ResteasyDispatchHelper {
             byte[] reqBody = REQUEST_BODY_HOLDER.get();
             REQUEST_BODY_HOLDER.remove();
             if (reqBody != null && BodyCaptureConfig.enabled()) {
-                boolean shouldAttach = !BodyCaptureConfig.errorOnly() || (status >= 400);
+                boolean shouldAttach = !BodyCaptureConfig.errorOnly() || (status >= 400) || (thrown != null);
                 if (shouldAttach) {
                     String ct = getRequestContentType(requestObj);
                     String reqPath = getRequestPath(requestObj);

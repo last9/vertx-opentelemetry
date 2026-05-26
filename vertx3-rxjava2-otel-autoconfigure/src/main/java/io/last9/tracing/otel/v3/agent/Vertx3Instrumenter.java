@@ -427,6 +427,9 @@ public final class Vertx3Instrumenter {
                                                             "org.jboss.resteasy.spi.HttpRequest")))
                                                     .and(takesArgument(1, named(
                                                             "org.jboss.resteasy.spi.HttpResponse")))))
+                                    // writeException: 3-arg in RESTEasy 3.x, 4-arg (+ Consumer) in 4.x.
+                                    // Matching on arg positions 0-2 covers both overloads safely;
+                                    // the advice only reads arg index 2 (Throwable).
                                     .visit(Advice.to(ResteasyWriteExceptionAdvice.class)
                                             .on(named("writeException")
                                                     .and(takesArgument(0, named(

@@ -308,6 +308,36 @@ class ResteasyDispatchHelperTest {
         assertThat(sd.getAttributes().get(AttributeKey.longKey("server.port"))).isEqualTo(8443L);
     }
 
+    @Test
+    void urlQueryFallsBackToAbsolutePathWhenGetRequestUriFails() throws Exception {
+        // getRequestUri() throws (not configured) → should fall back to getAbsolutePath()
+        URI absUri = new URI("http://api.example.com/api/v1/rounds?wsId=fallback");
+        StubUriInfo uriInfo = new StubUriInfo("/api/v1/rounds", null, absUri); // requestUri=null → throws
+        StubHttpRequest req = new StubHttpRequest("GET", uriInfo, Collections.emptyMap(), null);
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(200), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("url.query")))
+                .isEqualTo("wsId=fallback");
+    }
+
+    @Test
+    void bodyAttachedWhenNullResponseAndThrownWithErrorOnly() {
+        // response=null, thrown!=null, errorOnly=true → should capture body (it's an error)
+        enableBodyCapture(true, true);
+        byte[] body = "{\"wsId\":123}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = requestWithBody("POST", "/api/v1/rounds", body, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, null, new RuntimeException("async error"));
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.request.body")))
+                .isEqualTo("{\"wsId\":123}");
+    }
+
     // ---- Async exception recording tests (Bug 2: FDE-196) ----
 
     @Test
@@ -393,12 +423,15 @@ class ResteasyDispatchHelperTest {
     static class StubUriInfo {
         private final String path;
         private final URI requestUri;
+        private final URI absolutePath;
 
-        StubUriInfo(String path) { this(path, null); }
+        StubUriInfo(String path) { this(path, null, null); }
+        StubUriInfo(String path, URI requestUri) { this(path, requestUri, null); }
 
-        StubUriInfo(String path, URI requestUri) {
+        StubUriInfo(String path, URI requestUri, URI absolutePath) {
             this.path = path;
             this.requestUri = requestUri;
+            this.absolutePath = absolutePath;
         }
 
         public String getPath() { return path; }
@@ -406,6 +439,11 @@ class ResteasyDispatchHelperTest {
         public URI getRequestUri() throws Exception {
             if (requestUri == null) throw new Exception("not configured");
             return requestUri;
+        }
+
+        public URI getAbsolutePath() throws Exception {
+            if (absolutePath == null) throw new Exception("not configured");
+            return absolutePath;
         }
     }
 

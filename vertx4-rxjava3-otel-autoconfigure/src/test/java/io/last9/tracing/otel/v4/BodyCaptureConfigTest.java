@@ -33,6 +33,13 @@ class BodyCaptureConfigTest {
     }
 
     @Test
+    void enabledImpliedByErrorOnly() {
+        BodyCaptureConfig.envProvider = key ->
+                BodyCaptureConfig.ENV_ERROR_ONLY.equals(key) ? "true" : null;
+        assertThat(BodyCaptureConfig.enabled()).isTrue();
+    }
+
+    @Test
     void captureRequestDefaultTrue() {
         BodyCaptureConfig.envProvider = key -> null;
         assertThat(BodyCaptureConfig.captureRequest()).isTrue();
