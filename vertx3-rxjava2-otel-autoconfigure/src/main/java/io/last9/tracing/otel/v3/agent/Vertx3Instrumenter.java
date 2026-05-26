@@ -419,13 +419,22 @@ public final class Vertx3Instrumenter {
                     .disableClassFormatChanges()
                     .type(named("org.jboss.resteasy.core.SynchronousDispatcher"))
                     .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                            builder.visit(Advice.to(ResteasyDispatchAdvice.class)
-                                    .on(named("invoke")
-                                            .and(takesArguments(2))
-                                            .and(takesArgument(0, named(
-                                                    "org.jboss.resteasy.spi.HttpRequest")))
-                                            .and(takesArgument(1, named(
-                                                    "org.jboss.resteasy.spi.HttpResponse"))))))
+                            builder
+                                    .visit(Advice.to(ResteasyDispatchAdvice.class)
+                                            .on(named("invoke")
+                                                    .and(takesArguments(2))
+                                                    .and(takesArgument(0, named(
+                                                            "org.jboss.resteasy.spi.HttpRequest")))
+                                                    .and(takesArgument(1, named(
+                                                            "org.jboss.resteasy.spi.HttpResponse")))))
+                                    .visit(Advice.to(ResteasyWriteExceptionAdvice.class)
+                                            .on(named("writeException")
+                                                    .and(takesArgument(0, named(
+                                                            "org.jboss.resteasy.spi.HttpRequest")))
+                                                    .and(takesArgument(1, named(
+                                                            "org.jboss.resteasy.spi.HttpResponse")))
+                                                    .and(takesArgument(2, named(
+                                                            "java.lang.Throwable"))))))
                     .installOn(inst);
             log.info("Vertx3Instrumenter: RESTEasy dispatcher instrumentation installed");
         } catch (Throwable t) {

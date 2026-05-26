@@ -1,5 +1,6 @@
 package io.last9.tracing.otel.v3.agent;
 
+import io.last9.tracing.otel.v3.BodyCaptureConfig;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
@@ -13,13 +14,15 @@ import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 
-
+import java.io.InputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Helper methods called by {@link ResteasyDispatchAdvice} to create SERVER spans
@@ -37,11 +40,9 @@ public final class ResteasyDispatchHelper {
 
     private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
 
-    /**
-     * Holds the OTel {@link Scope} between enter and exit of the dispatch method.
-     * Safe because {@code SynchronousDispatcher.invoke()} is synchronous.
-     */
     private static final ThreadLocal<Scope> SCOPE_HOLDER = new ThreadLocal<>();
+    private static final ThreadLocal<byte[]> REQUEST_BODY_HOLDER = new ThreadLocal<>();
+    private static final AtomicBoolean URI_INFO_LOG_ONCE = new AtomicBoolean(false);
 
     /**
      * Extracts W3C trace context headers from a RESTEasy HttpRequest via reflection.
@@ -129,8 +130,21 @@ public final class ResteasyDispatchHelper {
                         span.setAttribute("url.query", uri.getQuery());
                     }
                 }
-            } catch (Exception ignored) {
-                // getRequestUri() may not be available in all RESTEasy versions
+            } catch (Exception e) {
+                if (URI_INFO_LOG_ONCE.compareAndSet(false, true)) {
+                    System.err.println("[last9-otel] getRequestUri() unavailable: " + e.getMessage());
+                }
+                // fallback: try getAbsolutePath() for query string
+                try {
+                    Object absUri = uriInfo.getClass().getMethod("getAbsolutePath").invoke(uriInfo);
+                    if (absUri instanceof URI) {
+                        URI abs = (URI) absUri;
+                        if (abs.getQuery() != null) span.setAttribute("url.query", abs.getQuery());
+                        if (abs.getScheme() != null) span.setAttribute("url.scheme", abs.getScheme());
+                        if (abs.getHost() != null) span.setAttribute("server.address", abs.getHost());
+                        if (abs.getPort() > 0) span.setAttribute("server.port", (long) abs.getPort());
+                    }
+                } catch (Exception ignored) {}
             }
 
             // User-Agent header
@@ -142,6 +156,25 @@ public final class ResteasyDispatchHelper {
                     span.setAttribute("user_agent.original", userAgent);
                 }
             } catch (Exception ignored) {}
+
+            // Request body capture (RESTEasy reads body before dispatch; mark/reset preserves it)
+            if (BodyCaptureConfig.enabled() && BodyCaptureConfig.captureRequest()) {
+                try {
+                    InputStream is = (InputStream) requestObj.getClass()
+                            .getMethod("getInputStream").invoke(requestObj);
+                    if (is != null && is.markSupported()) {
+                        int max = BodyCaptureConfig.maxBytes();
+                        is.mark(max + 1);
+                        byte[] buf = new byte[max];
+                        int read = is.read(buf, 0, buf.length);
+                        if (read > 0) {
+                            REQUEST_BODY_HOLDER.set(
+                                    read == buf.length ? buf : java.util.Arrays.copyOf(buf, read));
+                        }
+                        is.reset();
+                    }
+                } catch (Exception ignored) {}
+            }
 
             Context otelContext = parentContext.with(span);
             Scope scope = otelContext.makeCurrent();
@@ -165,6 +198,7 @@ public final class ResteasyDispatchHelper {
     public static void endSpan(Span span, Object requestObj, Object responseObj, Throwable thrown) {
         if (span == null) return;
 
+        int status = -1;
         try {
             if (thrown != null) {
                 span.recordException(thrown,
@@ -176,7 +210,7 @@ public final class ResteasyDispatchHelper {
                 try {
                     Object statusObj = responseObj.getClass()
                             .getMethod("getStatus").invoke(responseObj);
-                    int status = (int) statusObj;
+                    status = (int) statusObj;
                     span.setAttribute("http.response.status_code", (long) status);
                     if (status >= 500) {
                         span.setStatus(StatusCode.ERROR);
@@ -191,7 +225,6 @@ public final class ResteasyDispatchHelper {
                 String route = extractJaxRsRoute(requestObj);
                 if (route != null) {
                     span.setAttribute("http.route", route);
-                    // Update span name to use route template instead of literal path
                     String method = null;
                     try {
                         method = (String) requestObj.getClass()
@@ -202,6 +235,21 @@ public final class ResteasyDispatchHelper {
                     }
                 }
             }
+
+            // Attach captured request body
+            byte[] reqBody = REQUEST_BODY_HOLDER.get();
+            REQUEST_BODY_HOLDER.remove();
+            if (reqBody != null && BodyCaptureConfig.enabled()) {
+                boolean shouldAttach = !BodyCaptureConfig.errorOnly() || (status >= 400);
+                if (shouldAttach) {
+                    String ct = getRequestContentType(requestObj);
+                    String reqPath = getRequestPath(requestObj);
+                    if (BodyCaptureConfig.isAllowedContentType(ct) && BodyCaptureConfig.isAllowedPath(reqPath)) {
+                        span.setAttribute("http.request.body",
+                                new String(reqBody, StandardCharsets.UTF_8));
+                    }
+                }
+            }
         } finally {
             Scope scope = SCOPE_HOLDER.get();
             if (scope != null) {
@@ -209,6 +257,40 @@ public final class ResteasyDispatchHelper {
                 SCOPE_HOLDER.remove();
             }
             span.end();
+        }
+    }
+
+    /**
+     * Records an exception on the current span. Called by RESTEasy async error callbacks
+     * ({@code writeException}) where {@code @Advice.Thrown} is always null.
+     */
+    public static void recordAsyncException(Throwable throwable) {
+        if (throwable == null) return;
+        Span span = Span.current();
+        if (span == null || !span.isRecording()) return;
+        span.recordException(throwable,
+                Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
+        span.setStatus(StatusCode.ERROR, throwable.getMessage());
+    }
+
+    private static String getRequestContentType(Object requestObj) {
+        if (requestObj == null) return null;
+        try {
+            Object headers = requestObj.getClass().getMethod("getHttpHeaders").invoke(requestObj);
+            return (String) headers.getClass()
+                    .getMethod("getHeaderString", String.class).invoke(headers, "Content-Type");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String getRequestPath(Object requestObj) {
+        if (requestObj == null) return null;
+        try {
+            Object uriInfo = requestObj.getClass().getMethod("getUri").invoke(requestObj);
+            return (String) uriInfo.getClass().getMethod("getPath").invoke(uriInfo);
+        } catch (Exception e) {
+            return null;
         }
     }
 
