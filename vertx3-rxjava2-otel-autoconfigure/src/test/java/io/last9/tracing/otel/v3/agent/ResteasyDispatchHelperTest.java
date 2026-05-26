@@ -540,6 +540,27 @@ class ResteasyDispatchHelperTest {
     }
 
     @Test
+    void requestBodyCapturedForAsyncHandler() throws Exception {
+        // request body captured on invoke thread, must survive async thread hop to endSpanFromAsync
+        enableBodyCapture(true, false);
+        byte[] reqBytes = "{\"teamId\":\"t1\"}".getBytes(StandardCharsets.UTF_8);
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/json");
+        StubHttpRequest req = new StubHttpRequest("POST", new StubUriInfo("/api/v1/submit"),
+                headers, reqBytes, true, true); // suspended=true → async
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.closeScope();
+
+        // Simulate async delivery (different thread in production — no REQUEST_BODY_HOLDER here)
+        ResteasyDispatchHelper.endSpanFromAsync(req, new StubHttpResponse(200, "application/json"), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.request.body")))
+                .isEqualTo("{\"teamId\":\"t1\"}");
+    }
+
+    @Test
     void asyncExceptionEndedViaWriteException() {
         // async error path: invoke() closes scope; writeException ends span with exception
         StubHttpRequest req = new StubHttpRequest("POST", "/api/v1/fail", Collections.emptyMap(),

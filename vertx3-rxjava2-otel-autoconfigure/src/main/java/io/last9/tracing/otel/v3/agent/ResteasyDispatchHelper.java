@@ -45,11 +45,11 @@ public final class ResteasyDispatchHelper {
     private static final String TRACER_NAME = "io.last9.tracing.otel.v3";
 
     private static final ThreadLocal<Scope> SCOPE_HOLDER = new ThreadLocal<>();
-    private static final ThreadLocal<byte[]> REQUEST_BODY_HOLDER = new ThreadLocal<>();
     private static final AtomicBoolean URI_INFO_LOG_ONCE = new AtomicBoolean(false);
 
     // Request attribute keys — stored on HttpRequest so they survive async thread hops.
-    private static final String ATTR_SPAN = "io.last9.otel.span";
+    private static final String ATTR_SPAN         = "io.last9.otel.span";
+    private static final String ATTR_REQ_BODY     = "io.last9.otel.req.body";
     private static final String ATTR_RESP_CAPTURE = "io.last9.otel.resp.capture";
 
     /**
@@ -181,7 +181,7 @@ public final class ResteasyDispatchHelper {
                             is.mark(max + 1);
                             int read = is.read(buf, 0, max);
                             if (read > 0) {
-                                REQUEST_BODY_HOLDER.set(
+                                setReqAttr(requestObj, ATTR_REQ_BODY,
                                         read == max ? buf : java.util.Arrays.copyOf(buf, read));
                             }
                             is.reset();
@@ -193,7 +193,7 @@ public final class ResteasyDispatchHelper {
                             }
                             if (total > 0) {
                                 byte[] captured = total == max ? buf : java.util.Arrays.copyOf(buf, total);
-                                REQUEST_BODY_HOLDER.set(captured);
+                                setReqAttr(requestObj, ATTR_REQ_BODY, captured);
                                 // Restore: captured bytes + any remaining (truncated) stream
                                 InputStream restored = total < max
                                         ? new ByteArrayInputStream(captured)
@@ -277,9 +277,8 @@ public final class ResteasyDispatchHelper {
                 }
             }
 
-            // Attach captured request body
-            byte[] reqBody = REQUEST_BODY_HOLDER.get();
-            REQUEST_BODY_HOLDER.remove();
+            // Attach captured request body (stored on request attributes for async thread safety).
+            byte[] reqBody = (byte[]) getReqAttr(requestObj, ATTR_REQ_BODY);
             if (reqBody != null && BodyCaptureConfig.enabled()) {
                 boolean shouldAttach = !BodyCaptureConfig.errorOnly() || (status >= 400) || (thrown != null);
                 if (shouldAttach) {
