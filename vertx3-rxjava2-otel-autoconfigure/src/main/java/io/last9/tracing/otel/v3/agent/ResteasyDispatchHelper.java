@@ -318,19 +318,6 @@ public final class ResteasyDispatchHelper {
         }
     }
 
-    /**
-     * Records an exception on the current span. Called by RESTEasy async error callbacks
-     * ({@code writeException}) where {@code @Advice.Thrown} is always null.
-     */
-    public static void recordAsyncException(Throwable throwable) {
-        if (throwable == null) return;
-        Span span = Span.current();
-        if (span == null || !span.isRecording()) return;
-        span.recordException(throwable,
-                Attributes.of(AttributeKey.booleanKey("exception.escaped"), true));
-        span.setStatus(StatusCode.ERROR, throwable.getMessage());
-    }
-
     private static String getRequestContentType(Object requestObj) {
         if (requestObj == null) return null;
         try {

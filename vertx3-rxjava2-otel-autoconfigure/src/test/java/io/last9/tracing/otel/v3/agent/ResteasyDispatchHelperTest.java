@@ -388,14 +388,12 @@ class ResteasyDispatchHelperTest {
     // ---- Async exception recording tests (Bug 2: FDE-196) ----
 
     @Test
-    void asyncExceptionRecordedOnCurrentSpan() {
-        Span span = ResteasyDispatchHelper.startSpan(
-                new StubHttpRequest("POST", "/api/v1/rounds", Collections.emptyMap()));
+    void asyncExceptionRecordedViaWriteException() {
+        StubHttpRequest req = new StubHttpRequest("POST", "/api/v1/rounds", Collections.emptyMap());
+        ResteasyDispatchHelper.startSpan(req);
 
         RuntimeException asyncError = new RuntimeException("async 500 failure");
-        ResteasyDispatchHelper.recordAsyncException(asyncError);
-
-        ResteasyDispatchHelper.endSpan(span, null, new StubHttpResponse(500), null);
+        ResteasyDispatchHelper.endSpanFromWriteException(req, new StubHttpResponse(500), asyncError);
 
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
@@ -406,9 +404,11 @@ class ResteasyDispatchHelperTest {
     }
 
     @Test
-    void asyncExceptionNoopWhenNoCurrentSpan() {
-        // Should not throw even with no active span
-        ResteasyDispatchHelper.recordAsyncException(new RuntimeException("orphan"));
+    void asyncExceptionNoopWhenNoSpanOnRequest() {
+        // Request with no span stored — endSpanFromWriteException must not throw
+        StubHttpRequest req = new StubHttpRequest("POST", "/api/v1/rounds", Collections.emptyMap());
+        ResteasyDispatchHelper.endSpanFromWriteException(req, new StubHttpResponse(500),
+                new RuntimeException("orphan"));
         assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
     }
 
