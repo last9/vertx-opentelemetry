@@ -18,9 +18,11 @@ public class ResteasyDispatchAdvice {
     @Advice.OnMethodEnter(suppress = Throwable.class)
     static void onEnter(
             @Advice.Argument(0) Object request,
+            @Advice.Argument(1) Object response,
             @Advice.Local("otelSpan") Span span) {
 
         span = ResteasyDispatchHelper.startSpan(request);
+        ResteasyDispatchHelper.captureResponseSetup(response);
     }
 
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)

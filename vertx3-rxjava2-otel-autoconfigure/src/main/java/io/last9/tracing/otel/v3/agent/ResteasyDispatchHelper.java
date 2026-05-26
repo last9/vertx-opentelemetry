@@ -15,7 +15,9 @@ import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.SequenceInputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
@@ -44,6 +46,7 @@ public final class ResteasyDispatchHelper {
 
     private static final ThreadLocal<Scope> SCOPE_HOLDER = new ThreadLocal<>();
     private static final ThreadLocal<byte[]> REQUEST_BODY_HOLDER = new ThreadLocal<>();
+    private static final ThreadLocal<ByteArrayOutputStream> RESPONSE_BODY_HOLDER = new ThreadLocal<>();
     private static final AtomicBoolean URI_INFO_LOG_ONCE = new AtomicBoolean(false);
 
     /**
@@ -146,6 +149,7 @@ public final class ResteasyDispatchHelper {
                         if (abs.getScheme() != null) span.setAttribute("url.scheme", abs.getScheme());
                         if (abs.getHost() != null) span.setAttribute("server.address", abs.getHost());
                         if (abs.getPort() > 0) span.setAttribute("server.port", (long) abs.getPort());
+                        span.setAttribute("url.full", abs.toString());
                     }
                 } catch (Exception ignored) {}
             }
@@ -271,6 +275,21 @@ public final class ResteasyDispatchHelper {
                     if (BodyCaptureConfig.isAllowedContentType(ct) && BodyCaptureConfig.isAllowedPath(reqPath)) {
                         span.setAttribute("http.request.body",
                                 new String(reqBody, StandardCharsets.UTF_8));
+                    }
+                }
+            }
+
+            // Attach captured response body
+            ByteArrayOutputStream respCapture = RESPONSE_BODY_HOLDER.get();
+            RESPONSE_BODY_HOLDER.remove();
+            if (respCapture != null && respCapture.size() > 0 && BodyCaptureConfig.enabled()) {
+                boolean shouldAttach = !BodyCaptureConfig.errorOnly() || (status >= 400) || (thrown != null);
+                if (shouldAttach) {
+                    String ct = getResponseContentType(responseObj);
+                    String reqPath = getRequestPath(requestObj);
+                    if (BodyCaptureConfig.isAllowedContentType(ct) && BodyCaptureConfig.isAllowedPath(reqPath)) {
+                        span.setAttribute("http.response.body",
+                                new String(respCapture.toByteArray(), StandardCharsets.UTF_8));
                     }
                 }
             }
@@ -472,5 +491,84 @@ public final class ResteasyDispatchHelper {
         if (trimmed.endsWith("/")) trimmed = trimmed.substring(0, trimmed.length() - 1);
         if (trimmed.isEmpty()) return 0;
         return trimmed.split("/").length;
+    }
+
+    /**
+     * Wraps the RESTEasy HttpResponse output stream with a {@link TeeOutputStream} so that
+     * response body bytes are captured into a thread-local buffer for span attachment.
+     * No-op if response capture is disabled or wrapping fails.
+     *
+     * @param responseObj the RESTEasy HttpResponse (accessed via reflection)
+     */
+    public static void captureResponseSetup(Object responseObj) {
+        if (!BodyCaptureConfig.enabled() || !BodyCaptureConfig.captureResponse()) return;
+        if (responseObj == null) return;
+        try {
+            OutputStream original = (OutputStream) responseObj.getClass()
+                    .getMethod("getOutputStream").invoke(responseObj);
+            if (original == null) return;
+            ByteArrayOutputStream capture = new ByteArrayOutputStream();
+            OutputStream tee = new TeeOutputStream(original, capture, BodyCaptureConfig.maxBytes());
+            responseObj.getClass()
+                    .getMethod("setOutputStream", OutputStream.class)
+                    .invoke(responseObj, tee);
+            RESPONSE_BODY_HOLDER.set(capture);
+        } catch (Exception ignored) {}
+    }
+
+    private static String getResponseContentType(Object responseObj) {
+        if (responseObj == null) return null;
+        try {
+            Object headers = responseObj.getClass().getMethod("getOutputHeaders").invoke(responseObj);
+            Object ct = headers.getClass()
+                    .getMethod("getFirst", Object.class).invoke(headers, "Content-Type");
+            if (ct == null) {
+                @SuppressWarnings("unchecked")
+                java.util.List<Object> list = (java.util.List<Object>) headers.getClass()
+                        .getMethod("get", Object.class).invoke(headers, "Content-Type");
+                if (list != null && !list.isEmpty()) ct = list.get(0);
+            }
+            return ct != null ? ct.toString() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static final class TeeOutputStream extends OutputStream {
+        private final OutputStream original;
+        private final ByteArrayOutputStream capture;
+        private final int maxBytes;
+        private int written;
+
+        TeeOutputStream(OutputStream original, ByteArrayOutputStream capture, int maxBytes) {
+            this.original = original;
+            this.capture = capture;
+            this.maxBytes = maxBytes;
+        }
+
+        @Override
+        public void write(int b) throws java.io.IOException {
+            original.write(b);
+            if (written < maxBytes) {
+                capture.write(b);
+                written++;
+            }
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws java.io.IOException {
+            original.write(b, off, len);
+            if (written < maxBytes) {
+                int toCapture = Math.min(len, maxBytes - written);
+                capture.write(b, off, toCapture);
+                written += toCapture;
+            }
+        }
+
+        @Override
+        public void flush() throws java.io.IOException { original.flush(); }
+
+        @Override
+        public void close() throws java.io.IOException { original.close(); }
     }
 }

@@ -14,7 +14,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -342,9 +344,8 @@ class ResteasyDispatchHelperTest {
 
     @Test
     void urlQueryFallsBackToAbsolutePathWhenGetRequestUriFails() throws Exception {
-        // getRequestUri() throws (not configured) → should fall back to getAbsolutePath()
         URI absUri = new URI("http://api.example.com/api/v1/rounds?wsId=fallback");
-        StubUriInfo uriInfo = new StubUriInfo("/api/v1/rounds", null, absUri); // requestUri=null → throws
+        StubUriInfo uriInfo = new StubUriInfo("/api/v1/rounds", null, absUri);
         StubHttpRequest req = new StubHttpRequest("GET", uriInfo, Collections.emptyMap(), null);
 
         Span span = ResteasyDispatchHelper.startSpan(req);
@@ -353,6 +354,20 @@ class ResteasyDispatchHelperTest {
         SpanData sd = spanExporter.getFinishedSpanItems().get(0);
         assertThat(sd.getAttributes().get(AttributeKey.stringKey("url.query")))
                 .isEqualTo("wsId=fallback");
+    }
+
+    @Test
+    void urlFullSetInFallbackPath() throws Exception {
+        URI absUri = new URI("http://api.example.com:8080/api/v1/rounds?wsId=fallback");
+        StubUriInfo uriInfo = new StubUriInfo("/api/v1/rounds", null, absUri);
+        StubHttpRequest req = new StubHttpRequest("GET", uriInfo, Collections.emptyMap(), null);
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(200), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("url.full")))
+                .isEqualTo("http://api.example.com:8080/api/v1/rounds?wsId=fallback");
     }
 
     @Test
@@ -395,6 +410,107 @@ class ResteasyDispatchHelperTest {
         // Should not throw even with no active span
         ResteasyDispatchHelper.recordAsyncException(new RuntimeException("orphan"));
         assertThat(spanExporter.getFinishedSpanItems()).isEmpty();
+    }
+
+    // ---- Response body capture tests ----
+
+    @Test
+    void responseBodyCapturedWhenEnabled() throws Exception {
+        enableBodyCapture(true, false);
+        byte[] respBytes = "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/data", Collections.emptyMap());
+        StubHttpResponse resp = new StubHttpResponse(200, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(resp);
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpan(span, req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body")))
+                .isEqualTo("{\"status\":\"ok\"}");
+    }
+
+    @Test
+    void responseBodyNotCapturedWhenDisabled() throws Exception {
+        BodyCaptureConfig.envProvider = key -> null;
+        byte[] respBytes = "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/data", Collections.emptyMap());
+        StubHttpResponse resp = new StubHttpResponse(200, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(resp);
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpan(span, req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body"))).isNull();
+    }
+
+    @Test
+    void responseBodyNotCapturedFor2xxWhenErrorOnly() throws Exception {
+        enableBodyCapture(true, true);
+        byte[] respBytes = "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/data", Collections.emptyMap());
+        StubHttpResponse resp = new StubHttpResponse(200, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(resp);
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpan(span, req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body"))).isNull();
+    }
+
+    @Test
+    void responseBodyCapturedFor4xxWhenErrorOnly() throws Exception {
+        enableBodyCapture(true, true);
+        byte[] respBytes = "{\"error\":\"not found\"}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/data", Collections.emptyMap());
+        StubHttpResponse resp = new StubHttpResponse(404, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(resp);
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpan(span, req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body")))
+                .isEqualTo("{\"error\":\"not found\"}");
+    }
+
+    @Test
+    void responseBodyCapturedFor5xxWhenErrorOnly() throws Exception {
+        enableBodyCapture(true, true);
+        byte[] respBytes = "{\"error\":\"server fault\"}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/data", Collections.emptyMap());
+        StubHttpResponse resp = new StubHttpResponse(500, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(resp);
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpan(span, req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body")))
+                .isEqualTo("{\"error\":\"server fault\"}");
+    }
+
+    @Test
+    void responseBodyNotCapturedForBinaryContentType() throws Exception {
+        enableBodyCapture(true, false);
+        byte[] respBytes = new byte[]{1, 2, 3};
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/file", Collections.emptyMap());
+        StubHttpResponse resp = new StubHttpResponse(200, "application/octet-stream");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(resp);
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpan(span, req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body"))).isNull();
     }
 
     // ---- Test helpers ----
@@ -518,7 +634,35 @@ class ResteasyDispatchHelperTest {
     /** Stub for {@code org.jboss.resteasy.spi.HttpResponse}. */
     static class StubHttpResponse {
         private final int status;
-        StubHttpResponse(int status) { this.status = status; }
+        private final String contentType;
+        private OutputStream outputStream;
+
+        StubHttpResponse(int status) { this(status, null); }
+
+        StubHttpResponse(int status, String contentType) {
+            this.status = status;
+            this.contentType = contentType;
+            this.outputStream = new ByteArrayOutputStream();
+        }
+
         public int getStatus() { return status; }
+        public OutputStream getOutputStream() { return outputStream; }
+        public void setOutputStream(OutputStream os) { this.outputStream = os; }
+        public StubMultivaluedMap getOutputHeaders() {
+            Map<String, Object> map = new HashMap<>();
+            if (contentType != null) map.put("Content-Type", contentType);
+            return new StubMultivaluedMap(map);
+        }
+    }
+
+    /** Stub for {@code javax.ws.rs.core.MultivaluedMap<String, Object>}. */
+    static class StubMultivaluedMap {
+        private final Map<String, Object> data;
+        StubMultivaluedMap(Map<String, Object> data) { this.data = data; }
+        public Object getFirst(Object key) { return data.get(String.valueOf(key)); }
+        public List<Object> get(Object key) {
+            Object v = data.get(String.valueOf(key));
+            return v != null ? Collections.singletonList(v) : null;
+        }
     }
 }
