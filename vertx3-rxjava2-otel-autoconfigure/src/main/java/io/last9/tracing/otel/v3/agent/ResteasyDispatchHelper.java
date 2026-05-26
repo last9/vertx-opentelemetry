@@ -131,6 +131,7 @@ public final class ResteasyDispatchHelper {
                     if (uri.getQuery() != null) {
                         span.setAttribute("url.query", uri.getQuery());
                     }
+                    span.setAttribute("url.full", uri.toString());
                 }
             } catch (Exception e) {
                 if (URI_INFO_LOG_ONCE.compareAndSet(false, true)) {

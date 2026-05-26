@@ -311,6 +311,20 @@ class ResteasyDispatchHelperTest {
     }
 
     @Test
+    void urlFullSetFromRequestUri() throws Exception {
+        URI requestUri = new URI("https://api.example.com:8443/api/v1/rounds?wsId=123");
+        StubHttpRequest req = requestWithUri("GET", "/api/v1/rounds", requestUri,
+                Collections.emptyMap());
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(200), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("url.full")))
+                .isEqualTo("https://api.example.com:8443/api/v1/rounds?wsId=123");
+    }
+
+    @Test
     void urlSchemeAndHostExtractedFromRequestUri() throws Exception {
         URI requestUri = new URI("https://api.example.com:8443/api/v1/rounds");
         StubHttpRequest req = requestWithUri("GET", "/api/v1/rounds", requestUri,
