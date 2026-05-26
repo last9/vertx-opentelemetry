@@ -513,6 +513,27 @@ class ResteasyDispatchHelperTest {
         assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body"))).isNull();
     }
 
+    @Test
+    void responseBodyTruncatedAtMaxBytes() throws Exception {
+        BodyCaptureConfig.envProvider = key -> {
+            if (BodyCaptureConfig.ENV_ENABLED.equals(key)) return "true";
+            if (BodyCaptureConfig.ENV_MAX_BYTES.equals(key)) return "5";
+            return null;
+        };
+        byte[] respBytes = "hello world".getBytes(StandardCharsets.UTF_8); // 11 bytes
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/data", Collections.emptyMap());
+        StubHttpResponse resp = new StubHttpResponse(200, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(resp);
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpan(span, req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body")))
+                .isEqualTo("hello");
+    }
+
     // ---- Test helpers ----
 
     private static void enableBodyCapture(boolean enabled, boolean errorOnly) {

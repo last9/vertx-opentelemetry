@@ -279,10 +279,13 @@ public final class ResteasyDispatchHelper {
                 }
             }
 
-            // Attach captured response body
+            // Attach captured response body.
+            // Note: async handlers (CompletionStage) write the response AFTER invoke() returns,
+            // so the capture buffer is empty for those handlers and this block is skipped silently.
             ByteArrayOutputStream respCapture = RESPONSE_BODY_HOLDER.get();
             RESPONSE_BODY_HOLDER.remove();
-            if (respCapture != null && respCapture.size() > 0 && BodyCaptureConfig.enabled()) {
+            if (respCapture != null && respCapture.size() > 0
+                    && BodyCaptureConfig.enabled() && BodyCaptureConfig.captureResponse()) {
                 boolean shouldAttach = !BodyCaptureConfig.errorOnly() || (status >= 400) || (thrown != null);
                 if (shouldAttach) {
                     String ct = getResponseContentType(responseObj);
@@ -497,6 +500,11 @@ public final class ResteasyDispatchHelper {
      * Wraps the RESTEasy HttpResponse output stream with a {@link TeeOutputStream} so that
      * response body bytes are captured into a thread-local buffer for span attachment.
      * No-op if response capture is disabled or wrapping fails.
+     *
+     * <p><strong>Async limitation:</strong> For handlers returning {@code CompletionStage} or
+     * RxJava types, {@code invoke()} returns before the response is written, so the capture
+     * buffer will be empty when {@link #endSpan} runs. Body capture is effectively synchronous
+     * handlers only.
      *
      * @param responseObj the RESTEasy HttpResponse (accessed via reflection)
      */
