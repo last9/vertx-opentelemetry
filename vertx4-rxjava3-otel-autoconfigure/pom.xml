@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.last9</groupId>
         <artifactId>vertx-otel-autoconfigure</artifactId>
-    <version>2.3.5-beta.10</version>
+    <version>2.3.5-beta.11</version>
     </parent>
 
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
@@ -154,6 +154,14 @@
         <dependency>
             <groupId>io.vertx</groupId>
             <artifactId>vertx-web-client</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- JAX-RS API for route extraction unit tests (FakeContestResource annotations) -->
+        <dependency>
+            <groupId>javax.ws.rs</groupId>
+            <artifactId>javax.ws.rs-api</artifactId>
+            <version>2.1.1</version>
             <scope>test</scope>
         </dependency>
 

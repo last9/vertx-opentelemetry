@@ -81,7 +81,7 @@ public final class AgentBootstrap {
             installTransformers(inst);
             initializeOnAppClassLoader();
             log("[Last9 OTel Agent v4] Zero-code instrumentation installed successfully");
-        } catch (Exception e) {
+        } catch (Throwable e) {
             log("[Last9 OTel Agent v4] Failed to install instrumentation: " + e.getMessage());
             e.printStackTrace(System.err);
             log("[Last9 OTel Agent v4] Application will start WITHOUT bytecode instrumentation.");
@@ -163,8 +163,8 @@ public final class AgentBootstrap {
             Class<?> rxPropagation = appCL.loadClass(RX_PROPAGATION_CLASS);
             rxPropagation.getMethod("install").invoke(null);
             log("[Last9 OTel Agent v4] RxJava3 context propagation installed");
-        } catch (ClassNotFoundException e) {
-            // RxJava3 not on classpath — skip
+        } catch (Throwable e) {
+            // RxJava3 not on classpath or Flowable not resolvable — skip
         }
     }
 

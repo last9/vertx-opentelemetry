@@ -51,7 +51,7 @@ ByteBuddy instruments these at class-load time — no wrappers, no annotations, 
 | Lettuce (sync/async/reactive) | CLIENT | `db.system=redis`, `db.statement` |
 | Raw JDBC (`Statement.execute*`) | CLIENT | `db.system` (auto-detected), `db.statement` |
 | Netty HTTP client | CLIENT | `http.method`, `net.peer.name` |
-| RESTEasy (JAX-RS) | — | `@Path` templates → `http.route` |
+| RESTEasy (JAX-RS) | — | `@Path` templates → `http.route`; async `CompletionStage` handlers get correct route, response body, and ERROR status + exception (incl. servlet/Undertow) |
 | AWS SQS (SDK v1 + v2) | CONSUMER | `messaging.system=AmazonSQS` |
 
 ### Vert.x 4
