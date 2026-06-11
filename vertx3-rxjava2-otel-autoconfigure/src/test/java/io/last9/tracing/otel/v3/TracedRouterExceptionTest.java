@@ -3,7 +3,6 @@ package io.last9.tracing.otel.v3;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.data.EventData;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.reactivex.plugins.RxJavaPlugins;
@@ -17,7 +16,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,7 +40,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TracedRouterExceptionTest {
 
     private TestOtelSetup otel;
-    private InMemorySpanExporter spanExporter;
     private Vertx vertx;
     private WebClient webClient;
     private int port;
@@ -50,10 +47,9 @@ class TracedRouterExceptionTest {
     @BeforeEach
     void setUp(VertxTestContext testContext) throws Exception {
         RxJavaPlugins.reset();
-        resetInstalledFlag();
+        TestOtelSetup.resetRxJava2InstalledFlag();
 
         otel = new TestOtelSetup();
-        spanExporter = otel.getSpanExporter();
         vertx = Vertx.vertx();
         webClient = WebClient.create(vertx);
         RxJava2ContextPropagation.install();
@@ -128,7 +124,7 @@ class TracedRouterExceptionTest {
                         resp -> {
                             testContext.verify(() -> {
                                 assertThat(resp.statusCode()).isEqualTo(500);
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
                                 assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
                             });
                             testContext.completeNow();
@@ -144,7 +140,7 @@ class TracedRouterExceptionTest {
                 .subscribe(
                         resp -> {
                             testContext.verify(() -> {
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
                                 assertThat(span.getEvents())
                                         .as("Exception event must be recorded when ctx.fail(error) is called")
                                         .anyMatch(e -> e.getName().equals("exception"));
@@ -162,7 +158,7 @@ class TracedRouterExceptionTest {
                 .subscribe(
                         resp -> {
                             testContext.verify(() -> {
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
                                 EventData event = findExceptionEvent(span);
 
                                 assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.type")))
@@ -183,7 +179,7 @@ class TracedRouterExceptionTest {
                 .subscribe(
                         resp -> {
                             testContext.verify(() -> {
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
                                 EventData event = findExceptionEvent(span);
 
                                 String stacktrace = event.getAttributes()
@@ -207,7 +203,7 @@ class TracedRouterExceptionTest {
                 .subscribe(
                         resp -> {
                             testContext.verify(() -> {
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
                                 EventData event = findExceptionEvent(span);
 
                                 assertThat(event.getAttributes().get(AttributeKey.booleanKey("exception.escaped")))
@@ -230,7 +226,7 @@ class TracedRouterExceptionTest {
                         resp -> {
                             testContext.verify(() -> {
                                 assertThat(resp.statusCode()).isEqualTo(500);
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
                                 assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
 
                                 EventData event = findExceptionEvent(span);
@@ -254,7 +250,7 @@ class TracedRouterExceptionTest {
                 .subscribe(
                         resp -> {
                             testContext.verify(() -> {
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
                                 EventData event = findExceptionEvent(span);
                                 assertThat(event.getAttributes().get(AttributeKey.stringKey("exception.type")))
                                         .isEqualTo("java.lang.ArithmeticException");
@@ -276,7 +272,7 @@ class TracedRouterExceptionTest {
                         resp -> {
                             testContext.verify(() -> {
                                 assertThat(resp.statusCode()).isEqualTo(500);
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
                                 EventData event = findExceptionEvent(span);
 
                                 // NPE message is null — exception.message attribute may be absent or null
@@ -306,7 +302,7 @@ class TracedRouterExceptionTest {
                         resp -> {
                             testContext.verify(() -> {
                                 assertThat(resp.statusCode()).isEqualTo(500);
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
 
                                 assertThat(span.getStatus().getStatusCode())
                                         .as("5xx status must still mark span as ERROR")
@@ -332,7 +328,7 @@ class TracedRouterExceptionTest {
                         resp -> {
                             testContext.verify(() -> {
                                 assertThat(resp.statusCode()).isEqualTo(400);
-                                SpanData span = waitForServerSpan();
+                                SpanData span = otel.waitForServerSpan();
 
                                 assertThat(span.getStatus().getStatusCode())
                                         .as("4xx must not set span status to ERROR")
@@ -350,17 +346,6 @@ class TracedRouterExceptionTest {
 
     // ---- Helpers ----
 
-    private SpanData waitForServerSpan() {
-        for (int i = 0; i < 100; i++) {
-            List<SpanData> spans = spanExporter.getFinishedSpanItems().stream()
-                    .filter(s -> s.getKind() == SpanKind.SERVER)
-                    .toList();
-            if (!spans.isEmpty()) return spans.get(0);
-            try { Thread.sleep(50); } catch (InterruptedException e) { break; }
-        }
-        throw new AssertionError("No SERVER span found after 5 seconds");
-    }
-
     private EventData findExceptionEvent(SpanData span) {
         return span.getEvents().stream()
                 .filter(e -> e.getName().equals("exception"))
@@ -370,13 +355,4 @@ class TracedRouterExceptionTest {
                                 + "' but found none. Events: " + span.getEvents()));
     }
 
-    private void resetInstalledFlag() {
-        try {
-            var field = RxJava2ContextPropagation.class.getDeclaredField("installed");
-            field.setAccessible(true);
-            ((java.util.concurrent.atomic.AtomicBoolean) field.get(null)).set(false);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to reset installed flag", e);
-        }
-    }
 }

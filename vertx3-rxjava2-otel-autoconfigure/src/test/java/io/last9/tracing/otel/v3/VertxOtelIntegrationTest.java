@@ -36,7 +36,7 @@ class VertxOtelIntegrationTest {
     @BeforeEach
     void setUp(VertxTestContext testContext) throws Exception {
         RxJavaPlugins.reset();
-        resetInstalledFlag();
+        TestOtelSetup.resetRxJava2InstalledFlag();
 
         otel = new TestOtelSetup();
         spanExporter = otel.getSpanExporter();
@@ -91,7 +91,7 @@ class VertxOtelIntegrationTest {
                 .handler(io.vertx.reactivex.ext.web.handler.BodyHandler.create())
                 .handler(ctx -> {
                     // Span is stored on the RoutingContext, not in ThreadLocal scope
-                    Span span = ctx.get("otel.span");
+                    Span span = ctx.get(TracedRouter.SPAN_KEY);
                     String traceId = span != null ? span.getSpanContext().getTraceId() : "no-span";
                     JsonObject body = ctx.getBodyAsJson();
                     String msg = body != null ? body.getString("msg", "null") : "null";
@@ -393,13 +393,4 @@ class VertxOtelIntegrationTest {
         }
     }
 
-    private void resetInstalledFlag() {
-        try {
-            var field = RxJava2ContextPropagation.class.getDeclaredField("installed");
-            field.setAccessible(true);
-            ((java.util.concurrent.atomic.AtomicBoolean) field.get(null)).set(false);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to reset installed flag", e);
-        }
-    }
 }
