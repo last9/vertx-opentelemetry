@@ -24,11 +24,11 @@ Download the latest agent from [Releases](https://github.com/last9/vertx-opentel
 ```bash
 # Vert.x 3
 curl -L -o vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.5/vertx3-otel-agent-2.3.5.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.4.0/vertx3-otel-agent-2.4.0.jar
 
 # Vert.x 4
 curl -L -o vertx4-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.5/vertx4-otel-agent-2.3.5.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.4.0/vertx4-otel-agent-2.4.0.jar
 ```
 
 ## What gets instrumented
@@ -94,7 +94,7 @@ This library works with Vert.x's event-loop model — handler-based instrumentat
 
 ```bash
 curl -L -o /opt/otel/vertx3-otel-agent.jar \
-  https://github.com/last9/vertx-opentelemetry/releases/download/v2.3.5/vertx3-otel-agent-2.3.5.jar
+  https://github.com/last9/vertx-opentelemetry/releases/download/v2.4.0/vertx3-otel-agent-2.4.0.jar
 
 java -javaagent:/opt/otel/vertx3-otel-agent.jar -jar /opt/app/my-app.jar
 ```
@@ -234,7 +234,7 @@ Body capture records raw payloads in your trace backend. Use `VERTX_OTEL_BODY_CA
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx4-rxjava3-otel-autoconfigure</artifactId>
-    <version>2.3.5</version>
+    <version>2.4.0</version>
 </dependency>
 ```
 
@@ -253,7 +253,7 @@ consumer.batchHandler(KafkaTracing.tracedBatchHandler(topicName, this::handleBat
 <dependency>
     <groupId>io.last9</groupId>
     <artifactId>vertx3-rxjava2-otel-autoconfigure</artifactId>
-    <version>2.3.5</version>
+    <version>2.4.0</version>
 </dependency>
 ```
 
