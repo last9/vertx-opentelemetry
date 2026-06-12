@@ -1,7 +1,9 @@
 package io.last9.tracing.otel.v4;
 
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
@@ -57,6 +59,25 @@ public class TestOtelSetup {
 
     public void reset() {
         spanExporter.reset();
+    }
+
+    /** Waits for at least one finished SERVER span and returns the first. */
+    public SpanData waitForServerSpan() {
+        for (int i = 0; i < 50; i++) {
+            var span = spanExporter.getFinishedSpanItems().stream()
+                    .filter(s -> s.getKind() == SpanKind.SERVER)
+                    .findFirst();
+            if (span.isPresent()) {
+                return span.get();
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        throw new AssertionError("No SERVER span found after 5 seconds");
     }
 
     public void shutdown() {

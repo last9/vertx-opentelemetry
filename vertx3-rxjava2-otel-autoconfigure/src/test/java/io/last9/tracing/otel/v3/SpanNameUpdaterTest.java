@@ -1,6 +1,7 @@
 package io.last9.tracing.otel.v3;
 
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.sdk.trace.data.EventData;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
@@ -62,6 +63,13 @@ class SpanNameUpdaterTest {
         SpanNameUpdater.addToAllRoutes(routerAll);
         routerAll.get("/api/items/:category").handler(rc -> rc.response().setStatusCode(200).end("items"));
         routerAll.get("/api/error").handler(rc -> rc.response().setStatusCode(500).end("fail"));
+        routerAll.get("/api/fail-throwable").handler(rc -> rc.fail(new RuntimeException("boom")));
+        routerAll.get("/api/direct-500").handler(rc -> rc.response().setStatusCode(500).end("error"));
+        routerAll.route().failureHandler(rc -> {
+            int status = rc.statusCode() > 0 ? rc.statusCode() : 500;
+            String msg = rc.failure() != null ? rc.failure().getMessage() : "error";
+            rc.response().setStatusCode(status).end(msg != null ? msg : "error");
+        });
 
         VertxTestContext startCtx1 = new VertxTestContext();
         VertxTestContext startCtx2 = new VertxTestContext();
@@ -171,7 +179,64 @@ class SpanNameUpdaterTest {
         assertThat(ctx.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
     }
 
+    @Test
+    void addToAllRoutesRecordsExceptionWhenCtxFailSetsFailure(VertxTestContext ctx) throws Exception {
+        webClient.get(portAll, "localhost", "/api/fail-throwable").rxSend()
+                .subscribe(resp -> {
+                    ctx.verify(() -> {
+                        assertThat(resp.statusCode()).isEqualTo(500);
+                        SpanData span = otel.waitForServerSpan();
+                        assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+                        assertThat(span.getEvents())
+                                .anyMatch(e -> e.getName().equals("exception"));
+                    });
+                    ctx.completeNow();
+                }, ctx::failNow);
+        assertThat(ctx.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
+    @Test
+    void addToAllRoutesRecordsExceptionStacktraceOnCtxFail(VertxTestContext ctx) throws Exception {
+        webClient.get(portAll, "localhost", "/api/fail-throwable").rxSend()
+                .subscribe(resp -> {
+                    ctx.verify(() -> {
+                        EventData event = findExceptionEvent(otel.waitForServerSpan());
+                        String stacktrace = event.getAttributes()
+                                .get(AttributeKey.stringKey("exception.stacktrace"));
+                        assertThat(stacktrace)
+                                .isNotBlank()
+                                .contains("RuntimeException")
+                                .contains("boom");
+                    });
+                    ctx.completeNow();
+                }, ctx::failNow);
+        assertThat(ctx.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
+    @Test
+    void addToAllRoutesDirect500WithoutCtxFailHasNoExceptionEvent(VertxTestContext ctx) throws Exception {
+        webClient.get(portAll, "localhost", "/api/direct-500").rxSend()
+                .subscribe(resp -> {
+                    ctx.verify(() -> {
+                        assertThat(resp.statusCode()).isEqualTo(500);
+                        SpanData span = otel.waitForServerSpan();
+                        assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+                        assertThat(span.getEvents())
+                                .noneMatch(e -> e.getName().equals("exception"));
+                    });
+                    ctx.completeNow();
+                }, ctx::failNow);
+        assertThat(ctx.awaitCompletion(10, TimeUnit.SECONDS)).isTrue();
+    }
+
     // ---- Helpers ----
+
+    private static EventData findExceptionEvent(SpanData span) {
+        return span.getEvents().stream()
+                .filter(e -> e.getName().equals("exception"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No exception event on span: " + span.getName()));
+    }
 
     /**
      * Adds a span-provider handler at order {@code -2000} that creates a SERVER span

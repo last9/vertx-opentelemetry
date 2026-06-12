@@ -51,7 +51,7 @@ ByteBuddy instruments these at class-load time — no wrappers, no annotations, 
 | Lettuce (sync/async/reactive) | CLIENT | `db.system=redis`, `db.statement` |
 | Raw JDBC (`Statement.execute*`) | CLIENT | `db.system` (auto-detected), `db.statement` |
 | Netty HTTP client | CLIENT | `http.method`, `net.peer.name` |
-| RESTEasy (JAX-RS) | — | `@Path` templates → `http.route` |
+| RESTEasy (JAX-RS) | — | `@Path` templates → `http.route`; async `CompletionStage` handlers get correct route, response body, and ERROR status + exception (incl. servlet/Undertow) |
 | AWS SQS (SDK v1 + v2) | CONSUMER | `messaging.system=AmazonSQS` |
 
 ### Vert.x 4
@@ -139,6 +139,59 @@ All standard [OpenTelemetry environment variables](https://opentelemetry.io/docs
 | `OTEL_BSP_SCHEDULE_DELAY` | `5000` |
 
 Set `OTEL_EXPORTER_OTLP_TIMEOUT=30000` when exporting to remote backends.
+
+## HTTP body capture
+
+Disabled by default. Set `VERTX_OTEL_BODY_CAPTURE_ENABLED=true` to start recording request and response bodies as span attributes.
+
+```bash
+VERTX_OTEL_BODY_CAPTURE_ENABLED=true java -javaagent:vertx3-otel-agent.jar -jar my-app.jar
+```
+
+When enabled, every HTTP SERVER span gets:
+
+| Span attribute | Example |
+|----------------|---------|
+| `http.request.body` | `{"userId":"u1","symbol":"AAPL","quantity":10}` |
+| `http.response.body` | `{"id":42,"userId":"u1","symbol":"AAPL"}` |
+
+Only `application/json`, `application/xml`, and `text/*` content types are captured by default — binary payloads are skipped.
+
+### Tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VERTX_OTEL_BODY_CAPTURE_ENABLED` | `false` | Master switch |
+| `VERTX_OTEL_BODY_CAPTURE_REQUEST` | `true` | Capture request bodies |
+| `VERTX_OTEL_BODY_CAPTURE_RESPONSE` | `true` | Capture response bodies |
+| `VERTX_OTEL_BODY_CAPTURE_MAX_BYTES` | `8192` | Truncate bodies longer than this |
+| `VERTX_OTEL_BODY_CAPTURE_ERROR_ONLY` | `false` | Only capture on 4xx/5xx responses |
+| `VERTX_OTEL_BODY_CAPTURE_CONTENT_TYPES` | `application/json,application/xml,text/` | Comma-separated prefix allowlist |
+| `VERTX_OTEL_BODY_CAPTURE_INCLUDE_PATHS` | — | Only capture on these path prefixes (empty = all) |
+| `VERTX_OTEL_BODY_CAPTURE_EXCLUDE_PATHS` | — | Skip capture on these path prefixes |
+
+**Example: capture only POST /v1/payments, skip /health:**
+
+```bash
+VERTX_OTEL_BODY_CAPTURE_ENABLED=true
+VERTX_OTEL_BODY_CAPTURE_INCLUDE_PATHS=/v1/payments
+VERTX_OTEL_BODY_CAPTURE_EXCLUDE_PATHS=/health
+```
+
+### Prerequisite for Vert.x 3 POST/PUT routes
+
+The agent captures the body that Vert.x has already buffered. For POST/PUT routes, `BodyHandler` must be registered before your route handlers — otherwise the body is not buffered and nothing is captured:
+
+```java
+router.route().handler(BodyHandler.create());
+router.post("/v1/orders").handler(this::handleCreateOrder);
+```
+
+This is standard Vert.x — `BodyHandler` is required to call `ctx.getBodyAsJson()` or `ctx.body()` in your handlers regardless of body capture.
+
+### Security note
+
+Body capture records raw payloads in your trace backend. Use `VERTX_OTEL_BODY_CAPTURE_EXCLUDE_PATHS` or `VERTX_OTEL_BODY_CAPTURE_ERROR_ONLY` to avoid capturing auth endpoints or PII-heavy routes in production.
 
 ## Troubleshooting
 

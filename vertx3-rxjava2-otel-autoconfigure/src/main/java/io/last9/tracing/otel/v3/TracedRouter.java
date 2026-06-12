@@ -243,7 +243,24 @@ public final class TracedRouter {
                     }
                     span.setStatus(StatusCode.ERROR);
                 }
+
+                // HTTP body capture: request body only (response body requires agent path)
+                if (BodyCaptureConfig.enabled() && BodyCaptureConfig.captureRequest()) {
+                    io.vertx.reactivex.core.buffer.Buffer reqBody = ctx.getBody();
+                    String reqPath = ctx.request().path();
+                    String ct = ctx.request().getHeader("content-type");
+                    if (reqBody != null
+                            && BodyCaptureConfig.isAllowedContentType(ct)
+                            && BodyCaptureConfig.isAllowedPath(reqPath)) {
+                        String s = reqBody.toString("UTF-8");
+                        if (s.length() > BodyCaptureConfig.maxBytes()) {
+                            s = s.substring(0, BodyCaptureConfig.maxBytes()) + "[TRUNCATED]";
+                        }
+                        span.setAttribute("http.request.body", s);
+                    }
+                }
             });
+
 
             // Make the OTel context current and proceed to the next handler.
             try (Scope ignored = otelContext.makeCurrent()) {
@@ -280,4 +297,6 @@ public final class TracedRouter {
 
         return ctx.request().path();
     }
+
 }
+

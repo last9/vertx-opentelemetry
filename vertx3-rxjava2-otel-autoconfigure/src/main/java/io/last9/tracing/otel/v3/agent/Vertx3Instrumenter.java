@@ -419,13 +419,34 @@ public final class Vertx3Instrumenter {
                     .disableClassFormatChanges()
                     .type(named("org.jboss.resteasy.core.SynchronousDispatcher"))
                     .transform((builder, typeDescription, classLoader, module, protectionDomain) ->
-                            builder.visit(Advice.to(ResteasyDispatchAdvice.class)
-                                    .on(named("invoke")
-                                            .and(takesArguments(2))
-                                            .and(takesArgument(0, named(
-                                                    "org.jboss.resteasy.spi.HttpRequest")))
-                                            .and(takesArgument(1, named(
-                                                    "org.jboss.resteasy.spi.HttpResponse"))))))
+                            builder
+                                    .visit(Advice.to(ResteasyDispatchAdvice.class)
+                                            .on(named("invoke")
+                                                    .and(takesArguments(2))
+                                                    .and(takesArgument(0, named(
+                                                            "org.jboss.resteasy.spi.HttpRequest")))
+                                                    .and(takesArgument(1, named(
+                                                            "org.jboss.resteasy.spi.HttpResponse")))))
+                                    // writeException: 3-arg in RESTEasy 3.x, 4-arg (+ Consumer) in 4.x.
+                                    // Matching on arg positions 0-2 covers both overloads safely.
+                                    .visit(Advice.to(ResteasyWriteExceptionAdvice.class)
+                                            .on(named("writeException")
+                                                    .and(takesArgument(0, named(
+                                                            "org.jboss.resteasy.spi.HttpRequest")))
+                                                    .and(takesArgument(1, named(
+                                                            "org.jboss.resteasy.spi.HttpResponse")))
+                                                    .and(takesArgument(2, named(
+                                                            "java.lang.Throwable")))))
+                                    // asynchronousDelivery: called when CompletionStage/RxJava
+                                    // completes successfully; ends the span after response is written.
+                                    .visit(Advice.to(ResteasyAsyncDeliveryAdvice.class)
+                                            .on(named("asynchronousDelivery")
+                                                    .and(takesArgument(0, named(
+                                                            "org.jboss.resteasy.spi.HttpRequest")))
+                                                    .and(takesArgument(1, named(
+                                                            "org.jboss.resteasy.spi.HttpResponse")))
+                                                    .and(takesArgument(2, named(
+                                                            "javax.ws.rs.core.Response"))))))
                     .installOn(inst);
             log.info("Vertx3Instrumenter: RESTEasy dispatcher instrumentation installed");
         } catch (Throwable t) {

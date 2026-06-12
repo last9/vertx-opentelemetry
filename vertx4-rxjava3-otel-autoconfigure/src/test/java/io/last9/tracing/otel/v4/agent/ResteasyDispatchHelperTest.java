@@ -1,13 +1,11 @@
-package io.last9.tracing.otel.v3.agent;
+package io.last9.tracing.otel.v4.agent;
 
-import io.last9.tracing.otel.v3.BodyCaptureConfig;
+import io.last9.tracing.otel.v4.BodyCaptureConfig;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
-import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
-import io.opentelemetry.sdk.trace.data.EventData;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -165,7 +163,7 @@ class ResteasyDispatchHelperTest {
         assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
     }
 
-    // ---- Body capture tests (Bug 1: FDE-196) ----
+    // ---- Body capture tests ----
 
     @Test
     void requestBodyCapturedOnJsonPostWhen400AndBodyCaptureEnabled() {
@@ -296,7 +294,7 @@ class ResteasyDispatchHelperTest {
                 .isEqualTo("{\"wsId\":123}");
     }
 
-    // ---- url.query tests (Bug 3: FDE-196) ----
+    // ---- url.query / url.full tests ----
 
     @Test
     void urlQueryExtractedFromRequestUri() throws Exception {
@@ -385,7 +383,7 @@ class ResteasyDispatchHelperTest {
                 .isEqualTo("{\"wsId\":123}");
     }
 
-    // ---- Async exception recording tests (Bug 2: FDE-196) ----
+    // ---- Async exception recording tests ----
 
     @Test
     void asyncExceptionRecordedViaWriteException() {
@@ -707,14 +705,23 @@ class ResteasyDispatchHelperTest {
         private final String path;
         private final URI requestUri;
         private final URI absolutePath;
+        private final List<Object> matchedResources;
 
-        StubUriInfo(String path) { this(path, null, null); }
-        StubUriInfo(String path, URI requestUri) { this(path, requestUri, null); }
+        StubUriInfo(String path) { this(path, null, null, Collections.emptyList()); }
+        StubUriInfo(String path, URI requestUri) { this(path, requestUri, null, Collections.emptyList()); }
+        StubUriInfo(String path, List<Object> matchedResources) {
+            this(path, null, null, matchedResources);
+        }
 
         StubUriInfo(String path, URI requestUri, URI absolutePath) {
+            this(path, requestUri, absolutePath, Collections.emptyList());
+        }
+
+        StubUriInfo(String path, URI requestUri, URI absolutePath, List<Object> matchedResources) {
             this.path = path;
             this.requestUri = requestUri;
             this.absolutePath = absolutePath;
+            this.matchedResources = matchedResources;
         }
 
         public String getPath() { return path; }
@@ -728,6 +735,172 @@ class ResteasyDispatchHelperTest {
             if (absolutePath == null) throw new Exception("not configured");
             return absolutePath;
         }
+
+        public List<Object> getMatchedResources() { return matchedResources; }
+    }
+
+    // ---- Route extraction tests (JAX-RS @Path template matching) ----
+
+    /**
+     * Fake resource class used by route extraction tests.
+     * Simulates a class with multiple POST methods that share the same segment count,
+     * which is the case that broke the old segment-count approach.
+     */
+    @javax.ws.rs.Path("/api/v1/contests")
+    static class FakeContestResource {
+        @javax.ws.rs.POST @javax.ws.rs.Path("/{id}/submit")
+        public javax.ws.rs.core.Response submit() { return null; }
+
+        @javax.ws.rs.POST @javax.ws.rs.Path("/{id}/fail")
+        public javax.ws.rs.core.Response fail() { return null; }
+
+        @javax.ws.rs.POST @javax.ws.rs.Path("/{id}/fail-sync")
+        public javax.ws.rs.core.Response failSync() { return null; }
+
+        @javax.ws.rs.GET @javax.ws.rs.Path("/{id}")
+        public javax.ws.rs.core.Response get() { return null; }
+    }
+
+    private static StubHttpRequest requestWithMatchedResource(String method, String path,
+                                                               Object resource) {
+        StubUriInfo uriInfo = new StubUriInfo(path, Collections.singletonList(resource));
+        return new StubHttpRequest(method, uriInfo, Collections.emptyMap(), null);
+    }
+
+    @Test
+    void routeDisambiguatedForPostToFail() {
+        // Regression: all 3 POST methods have 2 segments — old segment-count approach
+        // returned the first one found (submit). Template matching must return fail.
+        FakeContestResource resource = new FakeContestResource();
+        StubHttpRequest req = requestWithMatchedResource("POST",
+                "/api/v1/contests/42/fail", resource);
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(500), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.route")))
+                .isEqualTo("/api/v1/contests/{id}/fail");
+        assertThat(sd.getName()).isEqualTo("POST /api/v1/contests/{id}/fail");
+    }
+
+    @Test
+    void routeDisambiguatedForPostToFailSync() {
+        FakeContestResource resource = new FakeContestResource();
+        StubHttpRequest req = requestWithMatchedResource("POST",
+                "/api/v1/contests/42/fail-sync", resource);
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(500), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.route")))
+                .isEqualTo("/api/v1/contests/{id}/fail-sync");
+        assertThat(sd.getName()).isEqualTo("POST /api/v1/contests/{id}/fail-sync");
+    }
+
+    @Test
+    void routeDisambiguatedForPostToSubmit() {
+        FakeContestResource resource = new FakeContestResource();
+        StubHttpRequest req = requestWithMatchedResource("POST",
+                "/api/v1/contests/42/submit", resource);
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(200), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.route")))
+                .isEqualTo("/api/v1/contests/{id}/submit");
+        assertThat(sd.getName()).isEqualTo("POST /api/v1/contests/{id}/submit");
+    }
+
+    @Test
+    void routeExtractedForGetWithPathParam() {
+        FakeContestResource resource = new FakeContestResource();
+        StubHttpRequest req = requestWithMatchedResource("GET",
+                "/api/v1/contests/42", resource);
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.endSpan(span, req, new StubHttpResponse(200), null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.route")))
+                .isEqualTo("/api/v1/contests/{id}");
+        assertThat(sd.getName()).isEqualTo("GET /api/v1/contests/{id}");
+    }
+
+    // ---- RESTEasy 4.x async exception flow: writeException → asynchronousDelivery ----
+
+    @Test
+    void asyncExceptionRecordedWhenStoredBeforeAsynchronousDelivery() {
+        // RESTEasy 4.x: writeException stores exception at onEnter, then calls
+        // asynchronousDelivery internally (which ends the span). endSpanFromAsync
+        // must read the stored exception even though thrown==null.
+        StubHttpRequest req = new StubHttpRequest("POST", "/api/v1/fail",
+                Collections.emptyMap(), null, true, true); // suspended
+        StubHttpResponse resp = new StubHttpResponse(500, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.closeScope();
+
+        // Simulate writeException.onEnter — stores exception before inner asynchronousDelivery
+        RuntimeException asyncErr = new RuntimeException("async failure for contest 42");
+        ResteasyDispatchHelper.storeAsyncException(req, asyncErr);
+
+        // Simulate asynchronousDelivery.onExit — thrown=null (the inner call didn't throw)
+        ResteasyDispatchHelper.endSpanFromAsync(req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        assertThat(sd.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(sd.getEvents()).anyMatch(e ->
+                e.getName().equals("exception") &&
+                e.getAttributes().get(AttributeKey.stringKey("exception.message"))
+                        .equals("async failure for contest 42"));
+    }
+
+    @Test
+    void endSpanFromWriteExceptionIsNoopWhenSpanAlreadyEnded() {
+        // After the inner asynchronousDelivery ends the span, the subsequent
+        // writeException.onExit call must be a no-op (span.isRecording() == false).
+        StubHttpRequest req = new StubHttpRequest("POST", "/api/v1/fail",
+                Collections.emptyMap(), null, true, true);
+        StubHttpResponse resp = new StubHttpResponse(500, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.closeScope();
+
+        RuntimeException asyncErr = new RuntimeException("async failure");
+        ResteasyDispatchHelper.storeAsyncException(req, asyncErr);
+        // asynchronousDelivery ends the span
+        ResteasyDispatchHelper.endSpanFromAsync(req, resp, null);
+        assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
+
+        // writeException.onExit fires — must not produce a second span
+        ResteasyDispatchHelper.endSpanFromWriteException(req, resp, asyncErr);
+        assertThat(spanExporter.getFinishedSpanItems()).hasSize(1);
+    }
+
+    @Test
+    void captureResponseSetupIsIdempotent() throws Exception {
+        // Second call from asynchronousDelivery.onEnter must not re-wrap the stream.
+        enableBodyCapture(true, false);
+        byte[] respBytes = "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+        StubHttpRequest req = new StubHttpRequest("GET", "/api/v1/data", Collections.emptyMap(),
+                null, true, true);
+        StubHttpResponse resp = new StubHttpResponse(200, "application/json");
+
+        Span span = ResteasyDispatchHelper.startSpan(req);
+        ResteasyDispatchHelper.captureResponseSetup(req, resp); // invoke() enter
+        ResteasyDispatchHelper.captureResponseSetup(req, resp); // asynchronousDelivery enter (idempotent)
+        ResteasyDispatchHelper.closeScope();
+
+        resp.getOutputStream().write(respBytes);
+        ResteasyDispatchHelper.endSpanFromAsync(req, resp, null);
+
+        SpanData sd = spanExporter.getFinishedSpanItems().get(0);
+        // Body must appear exactly once (not doubled by double-wrapping)
+        assertThat(sd.getAttributes().get(AttributeKey.stringKey("http.response.body")))
+                .isEqualTo("{\"status\":\"ok\"}");
     }
 
     /** Stub for {@code javax.ws.rs.core.HttpHeaders}. */

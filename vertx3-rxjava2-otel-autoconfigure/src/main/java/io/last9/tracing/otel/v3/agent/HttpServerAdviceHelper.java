@@ -224,7 +224,10 @@ public final class HttpServerAdviceHelper {
 
                 response.closeHandler(v -> {
                     if (span.isRecording()) {
-                        span.setStatus(StatusCode.ERROR, "Connection closed before response completed");
+                        java.io.IOException error =
+                                new java.io.IOException("Connection closed before response completed");
+                        span.recordException(error);
+                        span.setStatus(StatusCode.ERROR, error.getMessage());
                         span.end();
                     }
                 });
